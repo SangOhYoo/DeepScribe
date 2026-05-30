@@ -45,11 +45,13 @@ def list_assets(project_name: str = "default"):
             output_file = os.path.join(p_output, f"{cut_num}.json")
             status_flag = "completed" if os.path.exists(output_file) else "pending"
             
+            import urllib.parse
+            encoded_name = urllib.parse.quote(entry.name)
             assets_list.append({
                 "cut_number": cut_num,
                 "filename": entry.name,
                 "status": status_flag,
-                "file_path": f"/media/input/{project_name}/{entry.name}"  # 프로젝트 격리 정적 미디어 경로 매핑
+                "file_path": f"/media/input/{project_name}/{encoded_name}"  # 프로젝트 격리 정적 미디어 경로 매핑
             })
             
     # 컷 번호 기준 순차 정렬
