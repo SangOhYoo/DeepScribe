@@ -48,11 +48,12 @@ def list_assets(project_name: str = "default"):
             import urllib.parse
             encoded_project = urllib.parse.quote(project_name)
             encoded_name = urllib.parse.quote(entry.name)
+            mtime = int(entry.stat().st_mtime)
             assets_list.append({
                 "cut_number": cut_num,
                 "filename": entry.name,
                 "status": status_flag,
-                "file_path": f"/media/input/{encoded_project}/{encoded_name}"  # 프로젝트 격리 정적 미디어 경로 매핑
+                "file_path": f"/media/input/{encoded_project}/{encoded_name}?t={mtime}"  # 프로젝트 격리 정적 미디어 경로 매핑
             })
             
     # 컷 번호 기준 순차 정렬
