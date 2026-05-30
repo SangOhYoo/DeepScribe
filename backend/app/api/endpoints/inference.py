@@ -315,6 +315,45 @@ def analyze_theme_draft(
     if not user_prompt:
         user_prompt = "Analyze the manga visual settings and establish a comprehensive background guide in Korean."
     
+    # Query full novel manuscript to enrich background setting if exists
+    from sqlalchemy import func
+    try:
+        subquery = db.query(
+            StateHistory.cut_number,
+            func.max(StateHistory.revision).label("max_rev")
+        ).filter(
+            StateHistory.project_name == project_name,
+            StateHistory.file_type == "image_plot"
+        ).group_by(StateHistory.cut_number).subquery()
+        
+        latest_records = db.query(StateHistory).join(
+            subquery,
+            (StateHistory.cut_number == subquery.c.cut_number) & 
+            (StateHistory.revision == subquery.c.max_rev)
+        ).filter(
+            StateHistory.project_name == project_name,
+            StateHistory.file_type == "image_plot"
+        ).order_by(StateHistory.cut_number.asc()).all()
+        
+        full_novel_texts = []
+        for record in latest_records:
+            para = record.data.get("novel_paragraph", "")
+            if para:
+                full_novel_texts.append(f"[Cut #{record.cut_number}]\n{para}")
+        
+        full_novel_manuscript = "\n\n".join(full_novel_texts)
+        
+        if full_novel_manuscript:
+            user_prompt += (
+                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context]:\n"
+                "Here is the complete generated novel manuscript of this manga. "
+                "You MUST thoroughly analyze this story manuscript (which contains rich names, dialogues, settings, lore, and relationships) "
+                "along with the representative image, to extract and write a highly rich, accurate, and comprehensive guide in Korean:\n"
+                f"{full_novel_manuscript}"
+            )
+    except Exception as query_err:
+        logger.error(f"Failed to query full novel manuscript for theme draft: {query_err}")
+    
     if existing_context:
         user_prompt += (
             "\n\n[CRITICAL INSTRUCTION - Existing Setting Context to reference/expand/incorporate]:\n"
@@ -396,7 +435,6 @@ def analyze_characters_draft(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"대표 이미지 인코딩 실패: {str(e)}"
         )
-
     # 3. LLM 분석 요청
     from deepscribe.config import SYSTEM_PROMPT_CHARACTERS
     user_prompt = payload.get("user_prompt", "").strip() if payload else ""
@@ -404,6 +442,45 @@ def analyze_characters_draft(
     
     if not user_prompt:
         user_prompt = "Identify characters and reconstruct their relationship profile in Korean based on visual cues."
+        
+    # Query full novel manuscript to enrich character profiles if exists
+    from sqlalchemy import func
+    try:
+        subquery = db.query(
+            StateHistory.cut_number,
+            func.max(StateHistory.revision).label("max_rev")
+        ).filter(
+            StateHistory.project_name == project_name,
+            StateHistory.file_type == "image_plot"
+        ).group_by(StateHistory.cut_number).subquery()
+        
+        latest_records = db.query(StateHistory).join(
+            subquery,
+            (StateHistory.cut_number == subquery.c.cut_number) & 
+            (StateHistory.revision == subquery.c.max_rev)
+        ).filter(
+            StateHistory.project_name == project_name,
+            StateHistory.file_type == "image_plot"
+        ).order_by(StateHistory.cut_number.asc()).all()
+        
+        full_novel_texts = []
+        for record in latest_records:
+            para = record.data.get("novel_paragraph", "")
+            if para:
+                full_novel_texts.append(f"[Cut #{record.cut_number}]\n{para}")
+        
+        full_novel_manuscript = "\n\n".join(full_novel_texts)
+        
+        if full_novel_manuscript:
+            user_prompt += (
+                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context]:\n"
+                "Here is the complete generated novel manuscript of this manga. "
+                "You MUST thoroughly analyze this story manuscript (which contains rich names, dialogues, settings, lore, and relationships) "
+                "along with the representative image, to extract and write a highly rich, accurate, and comprehensive guide in Korean:\n"
+                f"{full_novel_manuscript}"
+            )
+    except Exception as query_err:
+        logger.error(f"Failed to query full novel manuscript for character draft: {query_err}")
     
     if existing_context:
         user_prompt += (
@@ -412,7 +489,6 @@ def analyze_characters_draft(
             "this text, integrating it seamlessly into your vision-analyzed output. Do NOT discard or conflict with it:\n"
             f"{existing_context}"
         )
-    
     try:
         result = engine.generate_json(SYSTEM_PROMPT_CHARACTERS, user_prompt, image_b64=img_b64)
     except Exception as e:
