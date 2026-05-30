@@ -548,18 +548,80 @@ export default function App() {
       }
     }
 
-    setProcessingProgress({
-      active: false,
-      total: 0,
-      current: 0,
-      currentCut: null,
-      statusText: ""
-    });
-
     if (cancelProcessingRef.current) {
+      setProcessingProgress({
+        active: false,
+        total: 0,
+        current: 0,
+        currentCut: null,
+        statusText: ""
+      });
       showNotification(`작업이 중단되었습니다. 중단 시점까지 총 ${successCount}개 컷 변환 완료.`, "info");
     } else {
       showNotification(`일괄 변환 완료: 총 ${successCount}개 컷 변환 성공!`, "success");
+      
+      // 마지막 단계로 세계관 배경과 등장인물 관계를 AI 분석으로 자동 생성
+      if (successCount > 0) {
+        try {
+          setProcessingProgress({
+            active: true,
+            total: 2,
+            current: 0,
+            currentCut: "세계관 배경",
+            statusText: "마지막 단계: 대표 이미지를 분석하여 세계관 배경(theme_background)을 생성하고 있습니다..."
+          });
+
+          // 1. 세계관 배경(theme) AI 분석 초안 생성
+          const themeRes = await fetch(`/api/inference/analyze/theme?project_name=${activeProject}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              user_prompt: tabPrompts.theme_background || "Analyze the manga visual settings and establish a comprehensive background guide in Korean.",
+              existing_context: ""
+            })
+          });
+
+          if (themeRes.ok) {
+            showNotification("세계관 배경(theme_background) AI 분석 및 신규 리비전 생성이 완료되었습니다.", "success");
+          }
+
+          setProcessingProgress({
+            active: true,
+            total: 2,
+            current: 1,
+            currentCut: "등장인물 관계",
+            statusText: "마지막 단계: 대표 이미지를 분석하여 등장인물 관계(character_profiles)를 생성하고 있습니다..."
+          });
+
+          // 2. 등장인물 관계(characters) AI 분석 초안 생성
+          const charRes = await fetch(`/api/inference/analyze/characters?project_name=${activeProject}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              user_prompt: tabPrompts.character_profiles || "Identify characters and reconstruct their relationship profile in Korean based on visual cues.",
+              existing_context: ""
+            })
+          });
+
+          if (charRes.ok) {
+            showNotification("등장인물 관계(character_profiles) AI 분석 및 신규 리비전 생성이 완료되었습니다.", "success");
+          }
+
+          showNotification("프로젝트 전체 분석 완료: 컷 분석, 세계관 및 등장인물 프로필이 성공적으로 자동 구축되었습니다!", "success");
+
+        } catch (autoErr) {
+          console.error("세계관/인물 프로필 자동 분석 중 오류:", autoErr);
+          showNotification("세계관 배경 및 등장인물 관계 자동 생성 중 통신 오류가 발생했습니다.", "error");
+        }
+      }
+
+      setProcessingProgress({
+        active: false,
+        total: 0,
+        current: 0,
+        currentCut: null,
+        statusText: ""
+      });
     }
     
     // 최종 상태 갱신
