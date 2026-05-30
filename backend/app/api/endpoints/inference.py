@@ -580,6 +580,45 @@ def analyze_plot_draft(
     if not user_prompt:
         user_prompt = "Establish a detailed overall novel plot outline in Korean based on visual cues from the manga first chapter cover or panel."
     
+    # Query full novel manuscript to enrich overall plot if exists
+    from sqlalchemy import func
+    try:
+        subquery = db.query(
+            StateHistory.cut_number,
+            func.max(StateHistory.revision).label("max_rev")
+        ).filter(
+            StateHistory.project_name == project_name,
+            StateHistory.file_type == "image_plot"
+        ).group_by(StateHistory.cut_number).subquery()
+        
+        latest_records = db.query(StateHistory).join(
+            subquery,
+            (StateHistory.cut_number == subquery.c.cut_number) & 
+            (StateHistory.revision == subquery.c.max_rev)
+        ).filter(
+            StateHistory.project_name == project_name,
+            StateHistory.file_type == "image_plot"
+        ).order_by(StateHistory.cut_number.asc()).all()
+        
+        full_novel_texts = []
+        for record in latest_records:
+            para = record.data.get("novel_paragraph", "")
+            if para:
+                full_novel_texts.append(f"[Cut #{record.cut_number}]\n{para}")
+        
+        full_novel_manuscript = "\n\n".join(full_novel_texts)
+        
+        if full_novel_manuscript:
+            user_prompt += (
+                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context]:\n"
+                "Here is the complete generated novel manuscript of this manga. "
+                "You MUST thoroughly analyze this story manuscript (which contains rich names, dialogues, settings, lore, and relationships) "
+                "along with the representative image, to extract and write a highly rich, accurate, and comprehensive overall story plot summary in Korean:\n"
+                f"{full_novel_manuscript}"
+            )
+    except Exception as query_err:
+        logger.error(f"Failed to query full novel manuscript for plot draft: {query_err}")
+        
     if existing_context:
         user_prompt += (
             "\n\n[CRITICAL INSTRUCTION - Existing Plot Context to reference/expand/incorporate]:\n"
