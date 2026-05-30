@@ -1,0 +1,42 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OS / Editor cache
+.vscode/
+.idea/
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local databases & configurations
+*.db
+*.db-journal
+settings.json
+
+# User project inputs / outputs
+inputs/
+outputs/
+backend/inputs/
+backend/outputs/
+deepscribe/inputs/
+deepscribe/outputs/
+
+# Frontend dependencies & builds
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+.eslintcache
+
+# Logs & temp files
+*.log
+.cache/
+.pytest_cache/
