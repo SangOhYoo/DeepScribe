@@ -39,7 +39,7 @@ def get_llama_engine() -> MultiGPULlamaEngine:
         # 기본값은 단일 GPU(-1) 및 레이어 전체 오프로드 설정입니다.
         _engine_instance = MultiGPULlamaEngine(
             model_path=DEFAULT_MODEL_PATH,
-            n_ctx=4096,
+            n_ctx=32768,
             n_gpu_layers=-1,
             tensor_split=None, # 다중 GPU 사용 시 여기에 [0.6, 0.4] 등 실수 비율 설정 가능
             main_gpu=0,
@@ -123,6 +123,48 @@ class ExtensibleExtractor:
         
         # LLM에 JSON 형태 데이터 생성 지시 (이미지 base64 데이터를 멀티모달 규격으로 개별 전달)
         return engine.generate_json(system_prompt, combined_user_prompt, image_b64=img_b64)
+
+
+def summarize_novel_manuscript(full_novel_texts: List[str], engine: MultiGPULlamaEngine) -> str:
+    """
+    LLM의 컨텍스트 제한을 방지하기 위해 생성된 소설 원고를 분할 정복(Divide & Conquer) 방식으로 요약합니다.
+    전체 텍스트 길이가 길 경우 청크 단위로 나누어 각각 요약한 뒤 취합합니다.
+    """
+    if not full_novel_texts:
+        return ""
+    
+    # 텍스트 길이 계산 (단순 글자 수 기준)
+    full_text = "\n\n".join(full_novel_texts)
+    if len(full_text) <= 25000:
+        return full_text
+
+    logger.info(f"소설 원고의 길이({len(full_text)}자)가 길어 분할 정복 요약을 시작합니다.")
+    
+    # 컷 단위 청킹 (컨텍스트가 크므로 20컷씩 묶음)
+    chunk_size = 20
+    chunks = [full_novel_texts[i:i + chunk_size] for i in range(0, len(full_novel_texts), chunk_size)]
+    
+    summaries = []
+    for i, chunk in enumerate(chunks):
+        chunk_text = "\n\n".join(chunk)
+        system_prompt = (
+            "You are an expert novel summarizer. "
+            "Please summarize the following novel excerpt in Korean. "
+            "Focus on key plot points, character actions, relationships, and important settings. "
+            "Keep the summary concise but informative, preserving essential names and context."
+        )
+        user_prompt = f"Excerpt:\n{chunk_text}\n\n위 소설 단락을 핵심 내용 위주로 요약해주세요:"
+        
+        try:
+            summary = engine.generate_text(system_prompt, user_prompt, temperature=0.3)
+            summaries.append(f"[구간 {i+1} 요약]\n{summary.strip()}")
+        except Exception as e:
+            logger.error(f"소설 청크 {i+1} 요약 실패: {e}")
+            summaries.append(f"[구간 {i+1} 요약]\n{chunk_text[:500]}... (요약 실패로 일부 원문 포함)")
+
+    final_summary = "\n\n".join(summaries)
+    logger.info(f"분할 정복 요약 완료 (총 {len(final_summary)}자)")
+    return final_summary
 
 
 @router.post("/run", response_model=dict)
@@ -341,13 +383,13 @@ def analyze_theme_draft(
             if para:
                 full_novel_texts.append(f"[Cut #{record.cut_number}]\n{para}")
         
-        full_novel_manuscript = "\n\n".join(full_novel_texts)
+        full_novel_manuscript = summarize_novel_manuscript(full_novel_texts, engine)
         
         if full_novel_manuscript:
             user_prompt += (
-                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context]:\n"
-                "Here is the complete generated novel manuscript of this manga. "
-                "You MUST thoroughly analyze this story manuscript (which contains rich names, dialogues, settings, lore, and relationships) "
+                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context (Summarized)]:\n"
+                "Here is the summarized generated novel manuscript of this manga. "
+                "You MUST thoroughly analyze this story summary (which contains rich names, dialogues, settings, lore, and relationships) "
                 "along with the representative image, to extract and write a highly rich, accurate, and comprehensive guide in Korean:\n"
                 f"{full_novel_manuscript}"
             )
@@ -469,13 +511,13 @@ def analyze_characters_draft(
             if para:
                 full_novel_texts.append(f"[Cut #{record.cut_number}]\n{para}")
         
-        full_novel_manuscript = "\n\n".join(full_novel_texts)
+        full_novel_manuscript = summarize_novel_manuscript(full_novel_texts, engine)
         
         if full_novel_manuscript:
             user_prompt += (
-                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context]:\n"
-                "Here is the complete generated novel manuscript of this manga. "
-                "You MUST thoroughly analyze this story manuscript (which contains rich names, dialogues, settings, lore, and relationships) "
+                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context (Summarized)]:\n"
+                "Here is the summarized generated novel manuscript of this manga. "
+                "You MUST thoroughly analyze this story summary (which contains rich names, dialogues, settings, lore, and relationships) "
                 "along with the representative image, to extract and write a highly rich, accurate, and comprehensive guide in Korean:\n"
                 f"{full_novel_manuscript}"
             )
@@ -606,13 +648,13 @@ def analyze_plot_draft(
             if para:
                 full_novel_texts.append(f"[Cut #{record.cut_number}]\n{para}")
         
-        full_novel_manuscript = "\n\n".join(full_novel_texts)
+        full_novel_manuscript = summarize_novel_manuscript(full_novel_texts, engine)
         
         if full_novel_manuscript:
             user_prompt += (
-                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context]:\n"
-                "Here is the complete generated novel manuscript of this manga. "
-                "You MUST thoroughly analyze this story manuscript (which contains rich names, dialogues, settings, lore, and relationships) "
+                "\n\n[CRITICAL INSTRUCTION - Generated Novel Manuscript Context (Summarized)]:\n"
+                "Here is the summarized generated novel manuscript of this manga. "
+                "You MUST thoroughly analyze this story summary (which contains rich names, dialogues, settings, lore, and relationships) "
                 "along with the representative image, to extract and write a highly rich, accurate, and comprehensive overall story plot summary in Korean:\n"
                 f"{full_novel_manuscript}"
             )

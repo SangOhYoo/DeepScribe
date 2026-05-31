@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Trash2, Play, CheckSquare, Square, RefreshCw, Upload, FileImage } from 'lucide-react';
+import { Trash2, Play, CheckSquare, Square, RefreshCw, Upload, FileImage, LayoutGrid, List } from 'lucide-react';
 
 export default function AssetManager({ projectName = "default", onProcessCuts, onSelectCut }) {
   const [cuts, setCuts] = useState([]);
@@ -7,6 +7,7 @@ export default function AssetManager({ projectName = "default", onProcessCuts, o
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [viewMode, setViewMode] = useState('grid');
 
   useEffect(() => {
     fetchCuts();
@@ -158,6 +159,24 @@ export default function AssetManager({ projectName = "default", onProcessCuts, o
           <p className="text-slate-400 text-xs mt-1">업로드된 컷들을 선택하여 AI 분석 파이프라인 일괄 실행 및 삭제 관리를 수행합니다.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* 뷰 모드 토글 */}
+          <div className="flex bg-slate-900/80 p-1 rounded-lg border border-slate-700/80 mr-2 shadow-inner">
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-1.5 rounded-md transition duration-200 flex items-center justify-center ${viewMode === 'grid' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}
+              title="그리드 뷰"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`p-1.5 rounded-md transition duration-200 flex items-center justify-center ${viewMode === 'list' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'}`}
+              title="리스트 뷰"
+            >
+              <List className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          
           {/* 업로드 컴포넌트 */}
           <label className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg cursor-pointer transition">
             <Upload className="w-3.5 h-3.5" />
@@ -217,7 +236,7 @@ export default function AssetManager({ projectName = "default", onProcessCuts, o
             <p className="text-[11px] text-slate-500 mt-1">이곳에 파일을 끌어다 놓거나 마우스로 클릭하여 추가하십시오.</p>
           </div>
         </div>
-      ) : (
+      ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 max-h-[480px] overflow-y-auto pr-2 scrollbar-thin">
           {cuts.map(cut => {
             const isSelected = selectedIds.has(cut.cut_number);
@@ -273,6 +292,65 @@ export default function AssetManager({ projectName = "default", onProcessCuts, o
                 </div>
                 <div className="p-3 flex items-center justify-between text-xs font-semibold text-slate-300 border-t border-slate-900">
                   <span>Cut #{cut.cut_number}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 max-h-[480px] overflow-y-auto pr-2 scrollbar-thin">
+          {cuts.map(cut => {
+            const isSelected = selectedIds.has(cut.cut_number);
+            return (
+              <div 
+                key={cut.cut_number}
+                onClick={() => onSelectCut && onSelectCut(cut.cut_number)}
+                className={`flex items-center gap-4 p-3 cursor-pointer rounded-xl border transition-all duration-300 ${
+                  isSelected 
+                    ? 'border-indigo-500 bg-indigo-950/20 shadow-md' 
+                    : 'border-slate-800 hover:border-slate-700 bg-slate-950/40'
+                }`}
+              >
+                <div 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelect(cut.cut_number);
+                  }}
+                  className={`shrink-0 w-5 h-5 rounded-md flex items-center justify-center border transition ${
+                    isSelected 
+                      ? 'bg-indigo-600 border-indigo-500 text-white' 
+                      : 'bg-slate-900 border-slate-700 text-transparent hover:border-slate-500'
+                  }`}
+                >
+                  ✓
+                </div>
+                
+                <div className="w-10 h-14 shrink-0 bg-slate-900 rounded-md overflow-hidden relative border border-slate-800 shadow-sm">
+                  <img 
+                    src={cut.file_path} 
+                    alt={cut.filename}
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                      e.target.src = "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=300&auto=format&fit=crop";
+                    }}
+                  />
+                </div>
+                
+                <div className="flex-1 min-w-0">
+                  <h4 className="text-sm font-semibold text-slate-200 truncate">{cut.filename}</h4>
+                  <p className="text-xs text-slate-500 mt-0.5 font-medium">Cut #{cut.cut_number}</p>
+                </div>
+                
+                <div className="shrink-0 flex items-center">
+                  {cut.status === 'completed' ? (
+                    <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider">
+                      변환 완료
+                    </span>
+                  ) : (
+                    <span className="bg-slate-800/80 text-slate-400 border border-slate-700/80 px-3 py-1 rounded-full text-[10px] font-bold tracking-wider">
+                      대기 중
+                    </span>
+                  )}
                 </div>
               </div>
             );

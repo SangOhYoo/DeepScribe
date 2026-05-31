@@ -38,6 +38,12 @@ def list_assets(project_name: str = "default"):
     if not os.path.exists(p_input):
         return []
 
+    # 물리적 디렉토리 이름(정제된 이름)을 사용하여 URL을 생성합니다.
+    # 이렇게 해야 project_name에 괄호나 특수문자가 있어서 디렉토리명과 달라지는 경우에도 404가 발생하지 않습니다.
+    safe_project_name = os.path.basename(p_input)
+    import urllib.parse
+    encoded_project = urllib.parse.quote(safe_project_name)
+
     for entry in os.scandir(p_input):
         if entry.is_file() and entry.name.lower().endswith(VALID_EXTENSIONS):
             cut_num = parse_cut_number(entry.name)
@@ -45,8 +51,6 @@ def list_assets(project_name: str = "default"):
             output_file = os.path.join(p_output, f"{cut_num}.json")
             status_flag = "completed" if os.path.exists(output_file) else "pending"
             
-            import urllib.parse
-            encoded_project = urllib.parse.quote(project_name)
             encoded_name = urllib.parse.quote(entry.name)
             mtime = int(entry.stat().st_mtime)
             assets_list.append({
