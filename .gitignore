@@ -19,6 +19,8 @@ ENV/
 # Local databases & configurations
 *.db
 *.db-journal
+*.db-shm
+*.db-wal
 settings.json
 
 # User project inputs / outputs
