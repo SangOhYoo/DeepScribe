@@ -5,7 +5,7 @@ import inspect
 import functools
 from datetime import datetime, timedelta
 from difflib import ndiff
-from models import init_db, Project, Character, ScenarioNode, HistoryLog, PromptVersion
+from models import init_db, Project, Character, ScenarioNode, HistoryLog, PromptVersion, CharacterVersion
 from client import LlamaAPIClient, optimize_prompt
 from engine.context_router import ContextRouter
 from engine.synthesizer import MultiPOVSynthesizer
@@ -327,15 +327,31 @@ def load_project_details(project_str):
             gr.update(choices=[], value=None),
             "", "",
             gr.update(choices=[], value=None),
-            gr.update(choices=[], value=None)
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=[])
         )
     pid = parse_project_id(project_str)
     
+    proj = db_session.query(Project).filter(Project.id == pid).first()
+    if not proj:
+        gr.Warning("선택한 프로젝트를 데이터베이스에서 찾을 수 없습니다. 올바른 프로젝트를 선택해주세요.")
+        return (
+            "", "other", "", "", "", "", gr.update(choices=[], value=None), gr.update(),
+            "", "", "", "",
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            "", "",
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=[])
+        )
+        
     choices = get_character_dropdown_choices(project_str)
     first_char_id = choices[0][1] if choices else None
     c_name, c_role, c_personality, c_background, c_relations, c_speech_style = on_character_select_change(first_char_id)
     
-    proj = db_session.query(Project).filter(Project.id == pid).first()
     system_prompt = proj.system_prompt or ""
     overall_plot = proj.overall_plot or ""
     positive_prompt = proj.positive_prompt or ""
@@ -566,6 +582,109 @@ def edit_prompt_version(version_str, new_version_name, project_str):
     new_val = updated_val[0] if updated_val else (updated_choices[0] if updated_choices else None)
     return gr.update(choices=updated_choices, value=new_val), ""
 
+def get_character_version_choices(char_id):
+    if not char_id:
+        return []
+    try:
+        versions = db_session.query(CharacterVersion).filter(CharacterVersion.character_id == char_id).order_by(CharacterVersion.created_at.desc()).all()
+        return [f"[{v.id}] {v.version_name} ({format_local_time(v.created_at)})" for v in versions]
+    except Exception as e:
+        print("Error fetching character versions:", e)
+        return []
+
+def get_character_version_choices_update(char_id):
+    choices = get_character_version_choices(char_id)
+    return gr.update(choices=choices, value=choices[0] if choices else None)
+
+def save_character_version(char_id, version_name, name, role, personality, background, relations_desc, speech_style):
+    if not char_id:
+        gr.Warning("선택된 등장인물이 없습니다.")
+        return gr.update(), ""
+    if not version_name.strip():
+        gr.Warning("버전 이름을 입력해 주세요.")
+        return gr.update(), ""
+        
+    try:
+        new_ver = CharacterVersion(
+            character_id=char_id,
+            version_name=version_name.strip(),
+            name=name.strip(),
+            personality=personality.strip() if personality else "",
+            background=background.strip() if background else "",
+            speech_style=speech_style.strip() if speech_style else "",
+            relations=role,
+            character_relations=relations_desc.strip() if relations_desc else ""
+        )
+        db_session.add(new_ver)
+        db_session.commit()
+        gr.Info(f"캐릭터 버전 '{new_ver.version_name}'이(가) 저장되었습니다.")
+        
+        updated_choices = get_character_version_choices(char_id)
+        return gr.update(choices=updated_choices, value=updated_choices[0] if updated_choices else None), ""
+    except Exception as e:
+        print("Error saving character version:", e)
+        gr.Warning("캐릭터 버전 저장 중 오류가 발생했습니다.")
+        return gr.update(), ""
+
+def load_character_version(version_str):
+    if not version_str:
+        gr.Warning("불러올 버전을 선택해 주세요.")
+        return "", "other", "", "", "", ""
+        
+    try:
+        vid = int(version_str.split("]")[0][1:])
+        ver = db_session.query(CharacterVersion).filter(CharacterVersion.id == vid).first()
+        if ver:
+            gr.Info(f"캐릭터 버전 '{ver.version_name}'을(를) 불러왔습니다.")
+            return ver.name or "", ver.relations or "other", ver.personality or "", ver.background or "", ver.character_relations or "", ver.speech_style or ""
+    except Exception as e:
+        print("Error loading character version:", e)
+        
+    gr.Warning("버전을 불러오는 데 실패했습니다.")
+    return "", "other", "", "", "", ""
+
+def delete_character_version(version_str, char_id):
+    if not version_str:
+        gr.Warning("삭제할 버전을 선택해 주세요.")
+        return gr.update()
+        
+    try:
+        vid = int(version_str.split("]")[0][1:])
+        ver = db_session.query(CharacterVersion).filter(CharacterVersion.id == vid).first()
+        if ver:
+            db_session.delete(ver)
+            db_session.commit()
+            gr.Info("해당 캐릭터 버전이 삭제되었습니다.")
+    except Exception as e:
+        print("Error deleting character version:", e)
+        
+    updated_choices = get_character_version_choices(char_id)
+    return gr.update(choices=updated_choices, value=updated_choices[0] if updated_choices else None)
+
+def edit_character_version(version_str, new_version_name, char_id):
+    if not version_str:
+        gr.Warning("수정할 버전을 선택해 주세요.")
+        return gr.update(), ""
+    if not new_version_name.strip():
+        gr.Warning("새로운 버전 이름을 입력해 주세요.")
+        return gr.update(), ""
+        
+    try:
+        vid = int(version_str.split("]")[0][1:])
+        ver = db_session.query(CharacterVersion).filter(CharacterVersion.id == vid).first()
+        if ver:
+            old_name = ver.version_name
+            ver.version_name = new_version_name.strip()
+            db_session.commit()
+            gr.Info(f"버전명이 '{old_name}'에서 '{ver.version_name}'(으)로 수정되었습니다.")
+    except Exception as e:
+        print("Error editing character version name:", e)
+        
+    updated_choices = get_character_version_choices(char_id)
+    updated_val = [c for c in updated_choices if c.startswith(f"[{vid}]")]
+    new_val = updated_val[0] if updated_val else (updated_choices[0] if updated_choices else None)
+    return gr.update(choices=updated_choices, value=new_val), ""
+
 def diff_texts(text1: str, text2: str):
     """
     Generate diff format for UI. 
@@ -645,6 +764,278 @@ def refine_scene_with_prompt(project_str, current_scene, user_refine_prompt, sys
         print("Error refining scene:", e)
         gr.Warning(f"씬 수정 중 오류가 발생했습니다: {str(e)}")
         return current_scene, []
+
+def autofill_characters_from_project(project_str):
+    if not project_str:
+        gr.Warning("선택된 프로젝트가 없습니다.")
+        return "", "", ""
+    pid = parse_project_id(project_str)
+    try:
+        characters = db_session.query(Character).filter(Character.project_id == pid).all()
+        female_text = ""
+        male_text = ""
+        relations_text = ""
+        
+        female_char = None
+        male_char = None
+        
+        for c in characters:
+            if c.relations == "female_hero":
+                female_char = c
+            elif c.relations == "male_hero":
+                male_char = c
+                
+        if female_char:
+            female_text = f"[{female_char.name}]: {female_char.personality or ''}"
+            if female_char.background:
+                female_text += f"\n배경: {female_char.background}"
+        else:
+            female_text = "스미래: [30대 중반 미망인, 겉으로는 정숙하나 내면에는 강렬한 성적 결핍과 탐욕이 있음. 연하남을 유혹할 때 노련하게 수치심 및 도발을 혼합하여 사용하는 전략적 성격]"
+            
+        if male_char:
+            male_text = f"[{male_char.name}]: {male_char.personality or ''}"
+            if male_char.background:
+                male_text += f"\n배경: {male_char.background}"
+        else:
+            male_text = "히로시: [20대 초반 대학생, 성실하지만 본능에 흔들리는 순진한 청년]"
+            
+        rel_parts = []
+        if female_char and male_char:
+            rel_parts.append(f"{female_char.name}(연상녀)-{male_char.name}(연하남)")
+        else:
+            rel_parts.append("연상녀-연하남")
+            
+        if female_char and female_char.character_relations:
+            rel_parts.append(female_char.character_relations)
+        elif male_char and male_char.character_relations:
+            rel_parts.append(male_char.character_relations)
+        else:
+            rel_parts.append("금기된 관계 / 유혹하는 자와 함락되는 자")
+            
+        relations_text = " / ".join(rel_parts)
+        
+        gr.Info("프로젝트 캐릭터 정보를 성공적으로 불러왔습니다.")
+        return female_text, male_text, relations_text
+    except Exception as e:
+        print("Error autofilling characters:", e)
+        gr.Warning("캐릭터 정보를 불러오는 데 실패했습니다.")
+        return "", "", ""
+
+def parse_scenario_cases(text: str) -> list[dict]:
+    import re
+    if not text:
+        return []
+    
+    cases = []
+    pattern = r'(?:^|\n)Case\s*(\d+)\s*[\.\:]?\s*([^\n]+)'
+    matches = list(re.finditer(pattern, text))
+    
+    for i, match in enumerate(matches):
+        case_num = int(match.group(1))
+        case_title = match.group(2).strip()
+        
+        start_idx = match.end()
+        end_idx = matches[i+1].start() if i + 1 < len(matches) else len(text)
+        case_body = text[start_idx:end_idx].strip()
+        
+        strategy = ""
+        description = ""
+        trigger = ""
+        
+        strategy_match = re.search(r'심리적 전략\s*:\s*(.*?)(?=\n\s*(?:상세 묘사|자극 포인트)|$)', case_body, re.DOTALL)
+        if strategy_match:
+            strategy = strategy_match.group(1).strip()
+            
+        desc_match = re.search(r'상세 묘사\s*:\s*(.*?)(?=\n\s*(?:심리적 전략|자극 포인트)|$)', case_body, re.DOTALL)
+        if desc_match:
+            description = desc_match.group(1).strip()
+            
+        trigger_match = re.search(r'자극 포인트\s*:\s*(.*?)(?=\n\s*(?:심리적 전략|상세 묘사)|$)', case_body, re.DOTALL)
+        if trigger_match:
+            trigger = trigger_match.group(1).strip()
+            
+        if not description:
+            description = case_body
+            
+        cases.append({
+            "number": case_num,
+            "title": case_title,
+            "strategy": strategy,
+            "description": description,
+            "trigger": trigger,
+            "full_text": f"Case {case_num}. {case_title}\n\n" + case_body
+        })
+    return cases
+
+def generate_psychological_scenarios_stream(
+    project_str, 
+    female_desc, 
+    male_desc, 
+    relations_desc, 
+    situation_desc,
+    num_cases,
+    sensory_enabled,
+    contrast_enabled,
+    buildup_enabled
+):
+    if not situation_desc.strip():
+        yield "⚠️ 미션 상황을 입력해 주세요.", [], gr.update(choices=[], value=None)
+        return
+        
+    system_prompt = (
+        "역할: 당신은 인간의 복잡한 심리와 관능적 긴장감을 섬세하게 묘사하는 전문 시나리오 작가이자 심리 분석가입니다. "
+        "대상을 철저히 분석하고 관능적인 씬을 작성하는 능력이 매우 뛰어납니다."
+    )
+    
+    user_prompt = f"""아래 설정을 바탕으로 상황에 대한 시나리오 케이스를 {num_cases}개로 분화하여 작성하라.
+
+[대상 캐릭터 및 관계 설정]
+- 여성 캐릭터: {female_desc}
+- 남성 캐릭터: {male_desc}
+- 관계성: {relations_desc}
+
+[미션 상황]
+- 특정 상황: {situation_desc}
+
+[시나리오 분화 가이드라인]
+단순한 나열이 아니라, 다음과 같은 '심리적 층위'에 따라 케이스를 나누어 작성하라.
+1. 심리적 기제: 이 행동을 하는 캐릭터의 내면 심리를 먼저 정의할 것. (출력 시 '심리적 전략'으로 표시)
+2. 외적 행동: 구체적인 제스처, 시선 처리, 호흡의 변화를 묘사할 것. (출력 시 '상세 묘사'에 대사와 함께 포함)
+3. 대사: 캐릭터의 성격이 드러나는 노련하고 관능적인 대사를 작성할 것. (출력 시 '상세 묘사'에 행동과 함께 포함)
+4. 결과적 자극: 이 행동이 상대방(남성)에게 어떤 심리적/육체적 자극을 주는지 명시할 것. (출력 시 '자극 포인트'로 표시)
+"""
+
+    reqs = []
+    if sensory_enabled:
+        reqs.append("- 시각, 청각, 후각, 촉각 중 최소 3가지 이상의 감각 묘사를 매 케이스마다 포함해줘.")
+    if contrast_enabled:
+        reqs.append("- 여주인공의 '사회적 신분(예: 정숙한 미망인)'과 '현재의 도발적인 행동' 사이의 간극이 극명하게 드러나도록 작성해줘.")
+    if buildup_enabled:
+        reqs.append(f"- 케이스 1번부터 {num_cases}번으로 갈수록 유혹의 강도와 노골적인 수위가 점점 높아지는 계단식 구성으로 작성해줘.")
+        
+    if reqs:
+        user_prompt += "\n[추가 조건]\n" + "\n".join(reqs) + "\n"
+        
+    user_prompt += """
+[출력 형식]
+매 케이스는 정확히 다음의 형식을 준수하여 출력할 것:
+
+Case [번호]. [케이스의 명칭/테마]
+심리적 전략: (여주인공이 어떤 심리로 이 행동을 하는가)
+상세 묘사: (행동과 대사가 포함된 관능적인 시나리오 텍스트)
+자극 포인트: (남주인공이 느끼게 될 심리적 타격점)
+
+설명이나 주석 없이 위의 케이스들만 순서대로 출력해 주세요.
+"""
+
+    accumulated = ""
+    yield "⏳ 생성 시작 중...", [], gr.update(choices=[], value=None)
+    
+    try:
+        for token in llama_client.stream_chat_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.85
+        ):
+            accumulated += token
+            yield accumulated, [], gr.update(choices=[], value=None)
+            
+        cases = parse_scenario_cases(accumulated)
+        choices = [f"Case {c['number']}. {c['title']}" for c in cases]
+        default_choice = choices[0] if choices else None
+        
+        yield accumulated, cases, gr.update(choices=choices, value=default_choice)
+    except Exception as e:
+        print("Error in generating cases:", e)
+        yield f"⚠️ 오류가 발생했습니다: {str(e)}", [], gr.update(choices=[], value=None)
+
+def load_selected_case_details(selected_case_str, parsed_cases):
+    if not selected_case_str or not parsed_cases:
+        return "", "", ""
+    
+    import re
+    match = re.search(r'Case\s*(\d+)', selected_case_str)
+    if not match:
+        return "", "", ""
+    
+    case_num = int(match.group(1))
+    for c in parsed_cases:
+        if c["number"] == case_num:
+            title = c["title"]
+            desc = c["description"]
+            meta = f"심리적 전략: {c['strategy']}\n\n자극 포인트: {c['trigger']}"
+            return title, desc, meta
+            
+    return "", "", ""
+
+def insert_case_to_scenario_node(project_str, stage, insert_position, current_node_index, case_title, case_content):
+    if not project_str or not stage:
+        gr.Warning("프로젝트와 플롯 단계를 먼저 선택해 주세요.")
+        return gr.update(), gr.update(), "", ""
+    if not case_content.strip():
+        gr.Warning("시나리오 노드에 삽입할 내용이 없습니다.")
+        return gr.update(), gr.update(), "", ""
+        
+    pid = parse_project_id(project_str)
+    try:
+        try:
+            current_node_index = int(current_node_index)
+        except (TypeError, ValueError):
+            current_node_index = None
+
+        existing = db_session.query(ScenarioNode).filter(
+            ScenarioNode.project_id == pid,
+            ScenarioNode.stage == stage
+        ).order_by(ScenarioNode.node_index).all()
+        
+        existing_indices = sorted(set(n.node_index for n in existing if n.node_index is not None))
+        max_index = max(existing_indices) if existing_indices else 0
+        
+        if insert_position == "end" or current_node_index is None or not existing_indices:
+            new_index = max_index + 1
+        elif insert_position == "before":
+            new_index = current_node_index
+        else:  # "after"
+            new_index = current_node_index + 1
+            
+        if insert_position != "end" and current_node_index is not None:
+            for node in existing:
+                if node.node_index is not None and node.node_index >= new_index:
+                    node.node_index += 1
+            db_session.flush()
+            
+        stage_short = stage.split()[0] if stage else "기"
+        
+        new_node = ScenarioNode(
+            project_id=pid,
+            stage=stage,
+            node_index=new_index,
+            title=f"{stage_short}-{new_index}: {case_title.strip() or '관능 케이스'}",
+            content=case_content.strip(),
+            commit_message=f"심리 시나리오 분화 삽입: {case_title.strip()}"
+        )
+        db_session.add(new_node)
+        db_session.commit()
+        db_session.expire_all()
+        
+        node_choices = get_node_choices_for_stage(pid, stage)
+        ver_choices = build_commit_tree_choices(pid, stage, new_index)
+        default_ver = max(ver_choices, key=lambda x: x[1])[1] if ver_choices else None
+        
+        pos_label = {"before": "앞에", "after": "뒤에", "end": "맨 끝"}.get(insert_position, "")
+        gr.Info(f"성공: {stage_short}-{new_index} 노드로 케이스가 {pos_label} 삽입되었습니다!")
+        
+        return (
+            gr.update(choices=node_choices, value=new_index),
+            gr.update(choices=node_choices, value=new_index),
+            gr.update(choices=ver_choices, value=default_ver),
+            f"{stage_short}-{new_index}: {case_title.strip()}",
+            case_content.strip()
+        )
+    except Exception as e:
+        print("Error inserting case scenario node:", e)
+        gr.Warning(f"시나리오 노드 삽입 실패: {str(e)}")
+        return gr.update(), gr.update(), gr.update(), "", ""
 
 def generate_scene(project_str, system_prompt, overall_plot, positive_prompt, negative_prompt, scene_instruction, selected_chars, target_node_id):
     if not project_str:
@@ -792,6 +1183,9 @@ def verify_generated_scene(project_str, scene_content, target_node_id=None):
             char_profiles_text += f"  (다른 인물과의 관계: {char.character_relations})\n"
             
     proj = db_session.query(Project).filter(Project.id == project_id).first()
+    if not proj:
+        yield fact_msg, "⚠️ 프로젝트가 존재하지 않습니다."
+        return
     overall_plot = proj.overall_plot or ""
     overall_plot_text = f"[소설 전체 줄거리]\n{overall_plot.strip()}\n" if overall_plot.strip() else ""
     
@@ -943,6 +1337,333 @@ def api_generate_scenario_nodes(project_str):
         gr.update(choices=stage_choices, value=default_stage),
         gr.update(choices=node_choices, value=default_node),
         gr.update(choices=ver_choices, value=default_ver)
+    )
+
+def on_case_stage_change(project_str, stage):
+    if not project_str or not stage:
+        return gr.update(choices=[], value=None), gr.update(choices=[], value=None), "", ""
+    pid = parse_project_id(project_str)
+    node_choices = get_node_choices_for_stage(pid, stage)
+    default_node = node_choices[0][1] if node_choices else None
+    
+    ver_choices = []
+    default_ver = None
+    content = ""
+    title = ""
+    if default_node is not None:
+        ver_choices = build_commit_tree_choices(pid, stage, default_node)
+        default_ver = max(ver_choices, key=lambda x: x[1])[1] if ver_choices else None
+        if default_ver:
+            node = db_session.query(ScenarioNode).filter(ScenarioNode.id == default_ver).first()
+            if node:
+                content = node.content or ""
+                title = node.title or ""
+                
+    return (
+        gr.update(choices=node_choices, value=default_node),
+        gr.update(choices=ver_choices, value=default_ver),
+        content,
+        title
+    )
+
+def on_case_node_change(project_str, stage, node_index):
+    if not project_str or not stage or node_index is None:
+        return gr.update(choices=[], value=None), "", ""
+    pid = parse_project_id(project_str)
+    ver_choices = build_commit_tree_choices(pid, stage, node_index)
+    default_ver = max(ver_choices, key=lambda x: x[1])[1] if ver_choices else None
+    
+    content = ""
+    title = ""
+    if default_ver:
+        node = db_session.query(ScenarioNode).filter(ScenarioNode.id == default_ver).first()
+        if node:
+            content = node.content or ""
+            title = node.title or ""
+            
+    return (
+        gr.update(choices=ver_choices, value=default_ver),
+        content,
+        title
+    )
+
+def on_case_ver_change(ver_id):
+    if not ver_id:
+        return "", ""
+    try:
+        node = db_session.query(ScenarioNode).filter(ScenarioNode.id == ver_id).first()
+        if node:
+            return node.content or "", node.title or ""
+    except Exception as e:
+        print("Error in on_case_ver_change:", e)
+    return "", ""
+
+def on_case_save_ver(project_str, stage, node_index, ver_id, title, content):
+    ret = save_current_scenario_version(project_str, stage, node_index, ver_id, title, content, "")
+    ver_choices_update, node_choices_update, target_scenario_choices_update, content, title = ret
+    return (
+        ver_choices_update,
+        ver_choices_update,
+        node_choices_update,
+        node_choices_update,
+        target_scenario_choices_update,
+        content,
+        content,
+        title,
+        title
+    )
+
+def on_case_delete_ver(project_str, stage, node_index, ver_id):
+    ret = delete_scenario_version(project_str, stage, node_index, ver_id)
+    ver_choices_update, node_choices_update, content, title = ret
+    
+    target_scenario_choices = get_target_scenario_node_choices(project_str)
+    default_target_scen = target_scenario_choices[0][1] if target_scenario_choices else None
+    target_scenario_choices_update = gr.update(choices=target_scenario_choices, value=default_target_scen)
+    
+    return (
+        ver_choices_update,
+        ver_choices_update,
+        node_choices_update,
+        node_choices_update,
+        target_scenario_choices_update,
+        content,
+        content,
+        title,
+        title
+    )
+
+def on_case_commit_ver(project_str, stage, node_index, title, content, commit_msg, ver_id):
+    ret = commit_new_scenario_version(project_str, stage, node_index, title, content, commit_msg, ver_id, "")
+    ver_choices_update, node_choices_update, _ = ret
+    
+    target_scenario_choices = get_target_scenario_node_choices(project_str)
+    default_target_scen = target_scenario_choices[0][1] if target_scenario_choices else None
+    target_scenario_choices_update = gr.update(choices=target_scenario_choices, value=default_target_scen)
+    
+    return (
+        ver_choices_update,
+        ver_choices_update,
+        node_choices_update,
+        node_choices_update,
+        target_scenario_choices_update,
+        content,
+        content,
+        title,
+        title,
+        ""
+    )
+
+def update_erotic_char_dropdowns(project_str):
+    if not project_str:
+        return gr.update(choices=[], value=None), gr.update(choices=[], value=None)
+    choices = get_character_dropdown_choices(project_str)
+    pid = parse_project_id(project_str)
+    try:
+        characters = db_session.query(Character).filter(Character.project_id == pid).all()
+    except Exception as e:
+        print("Error fetching characters for erotic dropdowns:", e)
+        characters = []
+        
+    default_female = None
+    default_male = None
+    for c in characters:
+        if c.relations == "female_hero":
+            default_female = c.id
+        elif c.relations == "male_hero":
+            default_male = c.id
+            
+    if not default_female and choices:
+        for label, cid in choices:
+            if "여자" in label:
+                default_female = cid
+                break
+    if not default_male and choices:
+        for label, cid in choices:
+            if "남자" in label:
+                default_male = cid
+                break
+
+    return (
+        gr.update(choices=choices, value=default_female),
+        gr.update(choices=choices, value=default_male)
+    )
+
+def on_female_char_select(char_id):
+    if not char_id:
+        return ""
+    try:
+        char = db_session.query(Character).filter(Character.id == char_id).first()
+        if char:
+            desc = f"[{char.name}]: {char.personality or ''}"
+            if char.background:
+                desc += f"\n배경: {char.background}"
+            return desc
+    except Exception as e:
+        print("Error on female character select:", e)
+    return ""
+
+def on_male_char_select(char_id):
+    if not char_id:
+        return ""
+    try:
+        char = db_session.query(Character).filter(Character.id == char_id).first()
+        if char:
+            desc = f"[{char.name}]: {char.personality or ''}"
+            if char.background:
+                desc += f"\n배경: {char.background}"
+            return desc
+    except Exception as e:
+        print("Error on male character select:", e)
+    return ""
+
+def ai_generate_erotic_settings(female_char_id, male_char_id):
+    if not female_char_id or not male_char_id:
+        gr.Warning("여성 캐릭터와 남성 캐릭터를 모두 선택해 주세요.")
+        return gr.update(), gr.update(), gr.update(), gr.update()
+        
+    try:
+        female_char = db_session.query(Character).filter(Character.id == female_char_id).first()
+        male_char = db_session.query(Character).filter(Character.id == male_char_id).first()
+        
+        if not female_char or not male_char:
+            gr.Warning("캐릭터 정보를 찾을 수 없습니다.")
+            return gr.update(), gr.update(), gr.update(), gr.update()
+            
+        female_info = f"이름: {female_char.name}\n역할: {female_char.relations or ''}\n성격/특징: {female_char.personality or ''}\n배경: {female_char.background or ''}\n타 캐릭터와의 관계성: {female_char.character_relations or ''}\n말투: {female_char.speech_style or ''}"
+        male_info = f"이름: {male_char.name}\n역할: {male_char.relations or ''}\n성격/특징: {male_char.personality or ''}\n배경: {male_char.background or ''}\n타 캐릭터와의 관계성: {male_char.character_relations or ''}\n말투: {male_char.speech_style or ''}"
+        
+        system_prompt = (
+            "당신은 인간의 복잡한 심리와 관능적 긴장감을 섬세하게 묘사하는 전문 시나리오 작가이자 심리 분석가입니다.\n"
+            "주어진 두 캐릭터 정보를 바탕으로, 관능 시나리오 분화(Erotic Scenario Branching)를 위해 적절한 캐릭터 설정, 관계성 설정, 그리고 첫 번째 도발이 일어날 수 있는 특정 상황/미션을 설정하여 JSON 형식으로 제공해 주세요.\n"
+            "반드시 JSON 형식으로만 응답해야 하며, JSON 스키마는 다음과 같습니다:\n"
+            "{\n"
+            "  \"female_desc\": \"여성 캐릭터에 대한 관능적/심리적 성격 묘사 (예: [스미래 / 30대 중반 미망인]: 겉으로는 정숙하나...)\",\n"
+            "  \"male_desc\": \"남성 캐릭터에 대한 관능적/심리적 성격 묘사 (예: [히로시 / 20대 초반 대학생]: 성실하지만 본능에 흔들리는...)\",\n"
+            "  \"relations\": \"두 사람의 관능적 관계성 키워드 (예: 연상녀-연하남 / 금기된 관계 / 유혹하는 자와 함락되는 자)\",\n"
+            "  \"situation\": \"첫 관능적 긴장이나 미션을 유도할 수 있는 구체적이고 자극적인 특정 상황 (예: 옷을 벗겨달라고 요구하는 상황)\"\n"
+            "}"
+        )
+        
+        user_prompt = (
+            f"여성 캐릭터 정보:\n{female_info}\n\n"
+            f"남성 캐릭터 정보:\n{male_info}"
+        )
+        
+        gr.Info("AI가 캐릭터에 특화된 관능 설정을 생성 중입니다...")
+        result = llama_client.send_chat_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=0.8,
+            parse_json=True
+        )
+        
+        if not result or not isinstance(result, dict):
+            gr.Warning("AI 설정 생성에 실패했습니다. 기본 또는 기존 설정 값을 사용해 주세요.")
+            return gr.update(), gr.update(), gr.update(), gr.update()
+            
+        f_desc = result.get("female_desc", "")
+        m_desc = result.get("male_desc", "")
+        rels = result.get("relations", "")
+        sit = result.get("situation", "")
+        
+        gr.Info("AI 설정이 생성 및 반영되었습니다!")
+        return f_desc, m_desc, rels, sit
+        
+    except Exception as e:
+        print("Error generating AI erotic settings:", e)
+        gr.Warning(f"AI 설정 생성 중 오류가 발생했습니다: {str(e)}")
+        return gr.update(), gr.update(), gr.update(), gr.update()
+
+def on_scen_stage_change(project_str, stage):
+    ret = on_stage_change(project_str, stage)
+    scen_node, scen_ver, content, title, regen_prompt = ret
+    return (
+        scen_node,
+        scen_node,
+        scen_ver,
+        scen_ver,
+        content,
+        content,
+        title,
+        title,
+        regen_prompt
+    )
+
+def on_scen_node_change(project_str, stage, node_index):
+    ret = on_node_change(project_str, stage, node_index)
+    scen_ver, content, title, regen_prompt = ret
+    return (
+        scen_ver,
+        scen_ver,
+        content,
+        content,
+        title,
+        title,
+        regen_prompt
+    )
+
+def on_scen_ver_change(ver_id):
+    ret = on_ver_change(ver_id)
+    content, title, regen_prompt = ret
+    return (
+        content,
+        content,
+        title,
+        title,
+        regen_prompt
+    )
+
+def on_scen_save_ver(project_str, stage, node_index, ver_id, title, content, regen_prompt):
+    ret = save_current_scenario_version(project_str, stage, node_index, ver_id, title, content, regen_prompt)
+    ver_choices_update, node_choices_update, target_scenario_choices_update, content, title = ret
+    return (
+        ver_choices_update,
+        ver_choices_update,
+        node_choices_update,
+        node_choices_update,
+        target_scenario_choices_update,
+        content,
+        content,
+        title,
+        title
+    )
+
+def on_scen_delete_ver(project_str, stage, node_index, ver_id):
+    ret = delete_scenario_version(project_str, stage, node_index, ver_id)
+    ver_choices_update, node_choices_update, content, title = ret
+    target_scenario_choices = get_target_scenario_node_choices(project_str)
+    default_target_scen = target_scenario_choices[0][1] if target_scenario_choices else None
+    target_scenario_choices_update = gr.update(choices=target_scenario_choices, value=default_target_scen)
+    return (
+        ver_choices_update,
+        ver_choices_update,
+        node_choices_update,
+        node_choices_update,
+        target_scenario_choices_update,
+        content,
+        content,
+        title,
+        title
+    )
+
+def on_scen_commit_ver(project_str, stage, node_index, title, content, commit_msg, ver_id, regen_prompt):
+    ret = commit_new_scenario_version(project_str, stage, node_index, title, content, commit_msg, ver_id, regen_prompt)
+    ver_choices_update, node_choices_update, _ = ret
+    target_scenario_choices = get_target_scenario_node_choices(project_str)
+    default_target_scen = target_scenario_choices[0][1] if target_scenario_choices else None
+    target_scenario_choices_update = gr.update(choices=target_scenario_choices, value=default_target_scen)
+    return (
+        ver_choices_update,
+        ver_choices_update,
+        node_choices_update,
+        node_choices_update,
+        target_scenario_choices_update,
+        content,
+        content,
+        title,
+        title,
+        ""
     )
 
 def on_stage_change(project_str, stage):
@@ -1931,6 +2652,103 @@ def copy_scenario_to_clipboard(project_str):
     gr.Info("전체 시나리오가 클립보드에 복사되었습니다!")
     return text
 
+def compile_all_character_profiles(project_str):
+    """프로젝트의 모든 등장인물 프로필을 텍스트로 컴파일합니다."""
+    if not project_str:
+        return ""
+    pid = parse_project_id(project_str)
+    proj = db_session.query(Project).filter(Project.id == pid).first()
+    if not proj:
+        return ""
+    
+    characters = db_session.query(Character).filter(Character.project_id == pid).all()
+    if not characters:
+        return ""
+        
+    lines = []
+    lines.append(f"{'='*60}")
+    lines.append(f"  {proj.title} - 등장인물 프로필 리스트")
+    lines.append(f"{'='*60}")
+    lines.append("")
+    
+    role_mapping = {
+        'male_hero': '남자 주인공',
+        'female_hero': '여자 주인공',
+        'male_sub': '남자 조연',
+        'female_sub': '여자 조연',
+        'other': '기타'
+    }
+    
+    for i, char in enumerate(characters):
+        role_kor = role_mapping.get(char.relations, '기타')
+        lines.append(f"{'-'*60}")
+        lines.append(f"{i+1}. 이름: {char.name}")
+        lines.append(f"   역할 및 분류: {role_kor}")
+        lines.append(f"{'-'*60}")
+        
+        if char.personality:
+            lines.append(f"* 겉으로 드러나는 가면 (표면적 성격):")
+            lines.append(f"  {char.personality.strip()}")
+            lines.append("")
+            
+        if char.background:
+            lines.append(f"* 숨겨진 결핍 및 본능 (심층 심리):")
+            lines.append(f"  {char.background.strip()}")
+            lines.append("")
+            
+        if char.character_relations:
+            lines.append(f"* 다른 등장인물간의 관계의 심층 역학 설정 가이드:")
+            lines.append(f"  {char.character_relations.strip()}")
+            lines.append("")
+            
+        if char.speech_style:
+            lines.append(f"* 언어적 발현: 호칭과 말투 구체화 요구사항:")
+            lines.append(f"  {char.speech_style.strip()}")
+            lines.append("")
+            
+        lines.append("")
+        
+    return "\n".join(lines)
+
+def export_characters_as_txt(project_str):
+    """전체 등장인물 프로필을 TXT 파일로 내보냅니다."""
+    if not project_str:
+        gr.Warning("선택된 프로젝트가 없습니다.")
+        return None
+    
+    text = compile_all_character_profiles(project_str)
+    if not text.strip():
+        gr.Warning("내보낼 등장인물 프로필이 없습니다.")
+        return None
+    
+    pid = parse_project_id(project_str)
+    proj = db_session.query(Project).filter(Project.id == pid).first()
+    safe_title = (proj.title if proj else "project").replace(" ", "_").replace("/", "_")
+    
+    export_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "exports")
+    os.makedirs(export_dir, exist_ok=True)
+    filepath = os.path.join(export_dir, f"{safe_title}_등장인물_프로필.txt")
+    
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(text)
+    
+    gr.Info("전체 등장인물 프로필 TXT 파일이 생성되었습니다.")
+    return filepath
+
+def copy_characters_to_clipboard(project_str):
+    """전체 등장인물 프로필 텍스트를 반환합니다 (클립보드 복사는 JS에서 처리)."""
+    if not project_str:
+        gr.Warning("선택된 프로젝트가 없습니다.")
+        return ""
+    
+    text = compile_all_character_profiles(project_str)
+    if not text.strip():
+        gr.Warning("복사할 등장인물 프로필이 없습니다.")
+        return ""
+    
+    gr.Info("전체 등장인물 프로필이 클립보드에 복사되었습니다!")
+    return text
+
 def compile_per_scenario_novels(project_str):
     """각 세부 시나리오별로 최종확정(또는 최신) 소설 내용을 리스트로 반환합니다.
     Returns: list of dicts: [{stage, node_index, title, outline, novel_content, is_finalized}, ...]
@@ -2216,6 +3034,8 @@ funcs_to_wrap = [
     save_project_settings, create_new_project, delete_project,
     get_prompt_version_choices, save_prompt_version, load_prompt_version,
     delete_prompt_version, edit_prompt_version, refine_scene_with_prompt,
+    get_character_version_choices, save_character_version, load_character_version,
+    delete_character_version, edit_character_version, get_character_version_choices_update,
     generate_scene, verify_generated_scene, api_generate_scenario_nodes,
     on_stage_change, on_node_change, on_ver_change, add_scenario_node,
     delete_scenario_node, commit_new_scenario_version, save_current_scenario_version,
@@ -2300,12 +3120,35 @@ def build_ui():
         init_target_scenario_choices = get_target_scenario_node_choices(initial_project)
         init_target_scenario_val = init_target_scenario_choices[0][1] if init_target_scenario_choices else None
 
+        # Initialize Erotic Scenario character choices
+        init_char_choices = get_character_dropdown_choices(initial_project)
+        init_female_val = None
+        init_male_val = None
+        
+        # Initialize Character Version choices
+        init_first_char_id = init_char_choices[0][1] if init_char_choices else None
+        init_char_ver_choices = get_character_version_choices(init_first_char_id)
+        init_char_ver_val = init_char_ver_choices[0] if init_char_ver_choices else None
+        if initial_project:
+            try:
+                init_pid = parse_project_id(initial_project)
+                init_chars = db_session.query(Character).filter(Character.project_id == init_pid).all()
+                for c in init_chars:
+                    if c.relations == "female_hero":
+                        init_female_val = c.id
+                    elif c.relations == "male_hero":
+                        init_male_val = c.id
+            except Exception as e:
+                print("Error loading initial erotic character values:", e)
+
         # Initialize Scene generation history data
         init_scene_history_choices = get_scene_history_choices(initial_project, init_target_scenario_val)
         init_scene_history_val = init_scene_history_choices[0][1] if init_scene_history_choices else None
 
         # Main Tabs
         with gr.Tabs():
+
+
             with gr.Tab("⚙️ 전체 설정 및 프롬프트"):
                 with gr.Row():
                     with gr.Column(scale=1):
@@ -2356,7 +3199,8 @@ def build_ui():
                                 label="이력 버전 선택",
                                 choices=init_ver_choices,
                                 value=init_ver_val,
-                                interactive=True
+                                interactive=True,
+                                allow_custom_value=True
                             )
                             with gr.Row():
                                 btn_load_version = gr.Button("📂 선택 버전 불러오기", variant="secondary")
@@ -2367,6 +3211,76 @@ def build_ui():
                                     placeholder="예: 이름 수정안"
                                 )
                                 btn_edit_version = gr.Button("✍️ 버전 이름 수정", variant="secondary")
+
+            with gr.Tab("👥 캐릭터 설정"):
+                gr.Markdown("### 👥 등장인물 프로필 설정")
+                with gr.Row():
+                    char_dropdown = gr.Dropdown(
+                        label="등장인물 선택",
+                        choices=get_character_dropdown_choices(initial_project),
+                        value=init_char_dropdown_update.get("value") if isinstance(init_char_dropdown_update, dict) else None,
+                        interactive=True,
+                        allow_custom_value=True,
+                        scale=3
+                    )
+                    btn_add_char = gr.Button("➕ 인물 추가", variant="secondary", scale=1)
+                    btn_delete_char = gr.Button("🗑️ 인물 삭제", variant="stop", scale=1)
+                with gr.Row():
+                    btn_generate_characters = gr.Button("🪄 AI 등장인물 프로필 자동 생성", variant="secondary")
+                    btn_save_character_detail = gr.Button("💾 등장인물 정보 저장", variant="primary")
+                with gr.Row():
+                    btn_export_chars_txt = gr.Button("📥 전체 프로필 TXT 다운로드", variant="secondary")
+                    btn_copy_chars_clipboard = gr.Button("📋 전체 프로필 클립보드 복사", variant="secondary")
+                char_download_file = gr.File(label="다운로드 파일", visible=False)
+                char_clipboard_hidden = gr.Textbox(visible=False, elem_id="char_clipboard_hidden")
+                
+                with gr.Group():
+                    char_name = gr.Textbox(label="인물 A (이름/나이/지위)", placeholder="예: 강이현 / 34세 / 대기업 전략기획본부장", value=init_char_name)
+                    char_role = gr.Dropdown(
+                        label="역할 및 분류",
+                        choices=[
+                            ("남자 주인공", "male_hero"),
+                            ("여자 주인공", "female_hero"),
+                            ("남자 조연", "male_sub"),
+                            ("여자 조연", "female_sub"),
+                            ("기타", "other")
+                        ],
+                        value=init_char_role or "other",
+                        interactive=True
+                    )
+                    char_personality = gr.Textbox(label="겉으로 드러나는 가면 (표면적 성격)", placeholder="예: 완벽주의, 냉혈함", value=init_char_personality, lines=2)
+                    char_background = gr.Textbox(label="숨겨진 결핍 및 본능 (심층 심리)", placeholder="예: 인정욕구, 타인에 대한 뿌리 깊은 불신", value=init_char_background, lines=3)
+                    char_relations = gr.Textbox(label="다른 등장인물간의 관계의 심층 역학 설정 가이드", placeholder="표면적 역학 vs 무의식적 긴장, 결핍의 상호작용, 결정적 균열의 시점", value=init_char_relations, lines=4)
+                    char_speech_style = gr.Textbox(label="언어적 발현: 호칭과 말투 구체화 요구사항", placeholder="공적인 공간 (가면을 쓴 상태) vs 사적인 공간 (경계가 허물어지는 순간)에서의 호칭 및 대화 양식", value=init_char_speech_style, lines=4)
+                    char_dummy = gr.State()
+
+                gr.Markdown("---")
+                with gr.Group():
+                    gr.Markdown("### 📜 캐릭터 프로필 버전 관리 (이력 관리)")
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            char_ver_name_input = gr.Textbox(
+                                label="저장할 버전 이름 / 변경 사항 설명",
+                                placeholder="예: 초안, 외양 상세화, 2차 수정안"
+                            )
+                            btn_save_char_version = gr.Button("💾 현재 설정을 새 버전으로 저장", variant="primary")
+                        with gr.Column(scale=3):
+                            char_version_dropdown = gr.Dropdown(
+                                label="이력 버전 선택",
+                                choices=init_char_ver_choices,
+                                value=init_char_ver_val,
+                                interactive=True,
+                                allow_custom_value=True
+                            )
+                            with gr.Row():
+                                btn_load_char_version = gr.Button("📂 선택 버전 불러오기", variant="secondary")
+                                btn_delete_char_version = gr.Button("🗑️ 선택 버전 삭제", variant="stop")
+                            with gr.Row():
+                                new_char_ver_name_input = gr.Textbox(
+                                    label="변경할 버전 이름",
+                                    placeholder="예: 이름 수정안"
+                                )
+                                btn_edit_char_version = gr.Button("✍️ 버전 이름 수정", variant="secondary")
 
             with gr.Tab("🗺️ 시나리오 구성"):
                 with gr.Row():
@@ -2408,7 +3322,8 @@ def build_ui():
                             label="3. 이력 버전 트리 선택 (Git Commits)",
                             choices=init_scen_ver_choices,
                             value=init_scen_ver_val,
-                            interactive=True
+                            interactive=True,
+                            allow_custom_value=True
                         )
                         
                     with gr.Column(scale=2):
@@ -2463,40 +3378,6 @@ def build_ui():
             with gr.Tab("🎬 씬 생성기"):
                 with gr.Row():
                     with gr.Column():
-                        with gr.Accordion("👥 등장인물 프로필 설정", open=True):
-                            with gr.Row():
-                                char_dropdown = gr.Dropdown(
-                                    label="등장인물 선택",
-                                    choices=get_character_dropdown_choices(initial_project),
-                                    value=init_char_dropdown_update.get("value") if isinstance(init_char_dropdown_update, dict) else None,
-                                    interactive=True,
-                                    scale=3
-                                )
-                                btn_add_char = gr.Button("➕ 인물 추가", variant="secondary", scale=1)
-                                btn_delete_char = gr.Button("🗑️ 인물 삭제", variant="stop", scale=1)
-                            with gr.Row():
-                                btn_generate_characters = gr.Button("🪄 AI 등장인물 프로필 자동 생성", variant="secondary")
-                                btn_save_character_detail = gr.Button("💾 등장인물 정보 저장", variant="primary")
-                            
-                            with gr.Group():
-                                char_name = gr.Textbox(label="인물 A (이름/나이/지위)", placeholder="예: 강이현 / 34세 / 대기업 전략기획본부장", value=init_char_name)
-                                char_role = gr.Dropdown(
-                                    label="역할 및 분류",
-                                    choices=[
-                                        ("남자 주인공", "male_hero"),
-                                        ("여자 주인공", "female_hero"),
-                                        ("남자 조연", "male_sub"),
-                                        ("여자 조연", "female_sub"),
-                                        ("기타", "other")
-                                    ],
-                                    value=init_char_role or "other",
-                                    interactive=True
-                                )
-                                char_personality = gr.Textbox(label="겉으로 드러나는 가면 (표면적 성격)", placeholder="예: 완벽주의, 냉혈함", value=init_char_personality, lines=2)
-                                char_background = gr.Textbox(label="숨겨진 결핍 및 본능 (심층 심리)", placeholder="예: 인정욕구, 타인에 대한 뿌리 깊은 불신", value=init_char_background, lines=3)
-                                char_relations = gr.Textbox(label="다른 등장인물간의 관계의 심층 역학 설정 가이드", placeholder="표면적 역학 vs 무의식적 긴장, 결핍의 상호작용, 결정적 균열의 시점", value=init_char_relations, lines=4)
-                                char_speech_style = gr.Textbox(label="언어적 발현: 호칭과 말투 구체화 요구사항", placeholder="공적인 공간 (가면을 쓴 상태) vs 사적인 공간 (경계가 허물어지는 순간)에서의 호칭 및 대화 양식", value=init_char_speech_style, lines=4)
-                                char_dummy = gr.State()
                         with gr.Group():
                             gr.Markdown("### 👥 이번 씬 출연 인물 선택")
                             active_characters = gr.CheckboxGroup(
@@ -2513,6 +3394,7 @@ def build_ui():
                                     choices=init_target_scenario_choices,
                                     value=init_target_scenario_val,
                                     interactive=True,
+                                    allow_custom_value=True,
                                     scale=3
                                 )
                                 btn_load_scen_node_gen = gr.Button("🎯 시나리오 불러오기", variant="secondary", scale=1)
@@ -2535,7 +3417,8 @@ def build_ui():
                             label="이전 생성 및 저장된 이력 선택",
                             choices=init_scene_history_choices,
                             value=init_scene_history_val,
-                            interactive=True
+                            interactive=True,
+                            allow_custom_value=True
                         )
                         with gr.Row():
                             btn_load_scene_history = gr.Button("📂 이 내용으로 불러오기", variant="secondary")
@@ -2579,6 +3462,169 @@ def build_ui():
                         elem_id="out_diff_full_width"
                     )
                     
+            with gr.Tab("🔥 관능 시나리오 분화"):
+                gr.Markdown(
+                    """
+                    # 🔥 관능적 심리 시나리오 분화 발전기
+                    *인물의 정숙한 외면과 은밀한 욕망의 모순을 탐구하고, 관능적 긴장감이 극대화된 상황을 다각도로 분화하여 집필합니다.*
+                    """
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 🎭 캐릭터 및 상황 설정")
+                        
+                        btn_autofill_chars = gr.Button("📂 현재 프로젝트 캐릭터 정보 가져오기", variant="secondary")
+                        
+                        with gr.Row():
+                            female_char_select = gr.Dropdown(
+                                label="여성 캐릭터 선택",
+                                choices=init_char_choices,
+                                value=init_female_val,
+                                interactive=True,
+                                allow_custom_value=True
+                            )
+                            male_char_select = gr.Dropdown(
+                                label="남성 캐릭터 선택",
+                                choices=init_char_choices,
+                                value=init_male_val,
+                                interactive=True,
+                                allow_custom_value=True
+                            )
+                        
+                        btn_ai_autofill_erotic_settings = gr.Button("🪄 AI 캐릭터 맞춤 설정 자동 완성", variant="primary")
+                        
+                        female_desc_input = gr.Textbox(
+                            label="여성 캐릭터 설정 (예: 스미래)",
+                            placeholder="예: 30대 중반 미망인, 겉으로는 정숙하나 내면에는 강렬한 성적 결핍과 탐욕이 있음...",
+                            value="스미래: [30대 중반 미망인, 겉으로는 정숙하나 내면에는 강렬한 성적 결핍과 탐욕이 있음. 연하남을 유혹할 때 노련하게 수치심 및 도발을 혼합하여 사용하는 전략적 성격]",
+                            lines=3
+                        )
+                        male_desc_input = gr.Textbox(
+                            label="남성 캐릭터 설정 (예: 히로시)",
+                            placeholder="예: 20대 초반 대학생, 성실하지만 본능에 흔들리는 순진한 청년...",
+                            value="히로시: [20대 초반 대학생, 성실하지만 본능에 흔들리는 순진한 청년]",
+                            lines=3
+                        )
+                        relations_desc_input = gr.Textbox(
+                            label="관계성 설정",
+                            placeholder="예: 연상녀-연하남 / 금기된 관계 / 유혹하는 자와 함락되는 자...",
+                            value="연상녀-연하남 / 금기된 관계 / 유혹하는 자와 함락되는 자",
+                            lines=2
+                        )
+                        situation_desc_input = gr.Textbox(
+                            label="특정 상황 / 미션 상황 설정",
+                            placeholder="예: 옷을 벗겨달라고 요구하는 상황, 빗속에서 문이 잠겨 단둘이 갇힌 상황 등",
+                            value="옷을 벗겨달라고 요구하는 상황",
+                            lines=2
+                        )
+                        
+                        with gr.Accordion("⚙️ 고급 설정 (추가 프롬프트 조건)", open=True):
+                            sensory_enabled = gr.Checkbox(
+                                label="👁️ 감각의 구체화 요청",
+                                value=True,
+                                info="시각, 청각, 후각, 촉각 중 최소 3가지 이상의 감각 묘사를 포함합니다."
+                            )
+                            contrast_enabled = gr.Checkbox(
+                                label="🎭 대조(Contrast) 강조 요청",
+                                value=True,
+                                info="사회적 정숙함과 도발적인 행동 사이의 수치심과 모순을 강조합니다."
+                            )
+                            buildup_enabled = gr.Checkbox(
+                                label="📈 단계적 빌드업 요청",
+                                value=True,
+                                info="케이스 번호가 올라갈수록 수위와 유혹의 노골함이 점진적으로 높아집니다."
+                            )
+                            num_cases_slider = gr.Slider(
+                                minimum=1,
+                                maximum=10,
+                                value=3,
+                                step=1,
+                                label="생성 케이스 수 (Number of Cases)"
+                            )
+                            
+                        btn_generate_cases = gr.Button("🔥 관능 시나리오 케이스 분화 생성", variant="primary")
+                        
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📜 생성된 시나리오 결과")
+                        out_cases_markdown = gr.Markdown(
+                            value="*왼쪽 설정을 마친 후 생성 버튼을 누르면 실시간으로 관능 시나리오가 분화되어 나타납니다.*",
+                            elem_id="cases_output"
+                        )
+                        
+                        parsed_cases_state = gr.State(value=[])
+                        
+                        with gr.Group():
+                            gr.Markdown("### 📥 시나리오 노드로 추가")
+                            
+                            case_select_dropdown = gr.Dropdown(
+                                label="추가할 케이스 선택",
+                                choices=[],
+                                interactive=True,
+                                allow_custom_value=True
+                            )
+                            
+                            with gr.Row():
+                                case_title_input = gr.Textbox(
+                                    label="시나리오 노드 제목",
+                                    placeholder="선택한 케이스 제목이 표시됩니다.",
+                                    scale=3
+                                )
+                                case_insert_pos = gr.Radio(
+                                    choices=[("앞에 삽입", "before"), ("뒤에 삽입", "after"), ("맨 끝에 삽입", "end")],
+                                    value="after",
+                                    label="삽입 위치",
+                                    scale=3
+                                )
+                                
+                            with gr.Row():
+                                with gr.Column(scale=1):
+                                    case_stage_select = gr.Dropdown(
+                                        label="1. 플롯 단계 선택 (Stage)",
+                                        choices=init_stages,
+                                        value=init_stages[0],
+                                        interactive=True
+                                    )
+                                with gr.Column(scale=2):
+                                    case_node_select = gr.Radio(
+                                        label="2. 세부 시나리오 노드 선택",
+                                        choices=init_node_choices,
+                                        value=init_node_val,
+                                        interactive=True
+                                    )
+                                    case_ver_select = gr.Dropdown(
+                                        label="3. 이력 버전 트리 선택 (Git Commits)",
+                                        choices=init_scen_ver_choices,
+                                        value=init_scen_ver_val,
+                                        interactive=True,
+                                        allow_custom_value=True
+                                    )
+                                
+                            case_content_input = gr.Textbox(
+                                label="상세 묘사 텍스트 (편집 가능)",
+                                placeholder="노드로 저장될 내용입니다. 편집 후 추가할 수 있습니다.",
+                                lines=8
+                            )
+                            case_meta_display = gr.Textbox(
+                                label="참고용 내면 심리 & 자극 포인트 (DB 비저장)",
+                                interactive=False,
+                                lines=4
+                            )
+                            
+                            with gr.Row():
+                                btn_save_case_ver = gr.Button("💾 현재 버전에 바로 저장", variant="primary")
+                                btn_delete_case_ver = gr.Button("🗑️ 선택한 버전 삭제", variant="stop")
+                                
+                            gr.Markdown("---")
+                            gr.Markdown("### 💾 새로운 버전으로 커밋")
+                            case_commit_msg = gr.Textbox(
+                                label="커밋 메시지 (변경 사항에 대한 간략한 기록)",
+                                placeholder="예: 관능 씬 묘사 다듬음, 대사 수정"
+                            )
+                            btn_commit_case_ver = gr.Button("💾 현재 변경사항을 새 버전으로 커밋", variant="primary")
+                            
+                            gr.Markdown("---")
+                            btn_insert_case = gr.Button("💾 선택한 케이스를 시나리오 노드로 삽입", variant="secondary")
+
             with gr.Tab("📖 최종 소설 취합"):
                 gr.Markdown("### 📖 세부 시나리오별 최종 작성 소설 취합 뷰")
                 gr.Markdown("각 시나리오 노드별로 최종확정된(또는 최신) 소설 내용을 한눈에 확인하고 관리할 수 있습니다.")
@@ -2621,6 +3667,177 @@ def build_ui():
                     )
                     novel_scenario_boxes.append(box)
 
+        # Erotic Scenario Branching Tab Events
+        btn_autofill_chars.click(
+            fn=autofill_characters_from_project,
+            inputs=[project_dropdown],
+            outputs=[female_desc_input, male_desc_input, relations_desc_input]
+        )
+        
+        btn_generate_cases.click(
+            fn=generate_psychological_scenarios_stream,
+            inputs=[
+                project_dropdown,
+                female_desc_input,
+                male_desc_input,
+                relations_desc_input,
+                situation_desc_input,
+                num_cases_slider,
+                sensory_enabled,
+                contrast_enabled,
+                buildup_enabled
+            ],
+            outputs=[
+                out_cases_markdown,
+                parsed_cases_state,
+                case_select_dropdown
+            ]
+        )
+        
+        case_select_dropdown.change(
+            fn=load_selected_case_details,
+            inputs=[case_select_dropdown, parsed_cases_state],
+            outputs=[case_title_input, case_content_input, case_meta_display]
+        )
+        
+        btn_insert_case.click(
+            fn=insert_case_to_scenario_node,
+            inputs=[
+                project_dropdown,
+                case_stage_select,
+                case_insert_pos,
+                case_node_select,
+                case_title_input,
+                case_content_input
+            ],
+            outputs=[
+                case_node_select,
+                scen_node_dropdown,
+                scen_ver_dropdown,
+                scen_title_box,
+                scen_content_box
+            ]
+        ).then(
+            fn=refresh_target_scenario_dropdown,
+            inputs=[project_dropdown],
+            outputs=[target_scenario_dropdown]
+        )
+
+        case_stage_select.change(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
+        )
+
+        case_node_select.change(
+            fn=on_case_node_change,
+            inputs=[project_dropdown, case_stage_select, case_node_select],
+            outputs=[case_ver_select, case_content_input, case_title_input]
+        )
+
+        case_ver_select.change(
+            fn=on_case_ver_change,
+            inputs=[case_ver_select],
+            outputs=[case_content_input, case_title_input]
+        )
+
+        project_dropdown.change(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
+        )
+
+        btn_save_case_ver.click(
+            fn=on_case_save_ver,
+            inputs=[
+                project_dropdown,
+                case_stage_select,
+                case_node_select,
+                case_ver_select,
+                case_title_input,
+                case_content_input
+            ],
+            outputs=[
+                case_ver_select,
+                scen_ver_dropdown,
+                case_node_select,
+                scen_node_dropdown,
+                target_scenario_dropdown,
+                case_content_input,
+                scen_content_box,
+                case_title_input,
+                scen_title_box
+            ]
+        )
+
+        btn_delete_case_ver.click(
+            fn=on_case_delete_ver,
+            inputs=[
+                project_dropdown,
+                case_stage_select,
+                case_node_select,
+                case_ver_select
+            ],
+            outputs=[
+                case_ver_select,
+                scen_ver_dropdown,
+                case_node_select,
+                scen_node_dropdown,
+                target_scenario_dropdown,
+                case_content_input,
+                scen_content_box,
+                case_title_input,
+                scen_title_box
+            ]
+        )
+
+        btn_commit_case_ver.click(
+            fn=on_case_commit_ver,
+            inputs=[
+                project_dropdown,
+                case_stage_select,
+                case_node_select,
+                case_title_input,
+                case_content_input,
+                case_commit_msg,
+                case_ver_select
+            ],
+            outputs=[
+                case_ver_select,
+                scen_ver_dropdown,
+                case_node_select,
+                scen_node_dropdown,
+                target_scenario_dropdown,
+                case_content_input,
+                scen_content_box,
+                case_title_input,
+                scen_title_box,
+                case_commit_msg
+            ]
+        )
+
+        female_char_select.change(
+            fn=on_female_char_select,
+            inputs=[female_char_select],
+            outputs=[female_desc_input]
+        )
+
+        male_char_select.change(
+            fn=on_male_char_select,
+            inputs=[male_char_select],
+            outputs=[male_desc_input]
+        )
+
+        btn_ai_autofill_erotic_settings.click(
+            fn=ai_generate_erotic_settings,
+            inputs=[female_char_select, male_char_select],
+            outputs=[female_desc_input, male_desc_input, relations_desc_input, situation_desc_input]
+        )
+
         # Set up event handlers
         btn_load_project.click(
             fn=load_project_details,
@@ -2641,6 +3858,18 @@ def build_ui():
                 target_scenario_dropdown,
                 active_characters
             ]
+        ).then(
+            fn=lambda: gr.update(value="기 (起 - 도입)"),
+            inputs=[],
+            outputs=[case_stage_select]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
         )
         
         btn_save_project.click(
@@ -2683,6 +3912,18 @@ def build_ui():
                 target_scenario_dropdown,
                 active_characters
             ]
+        ).then(
+            fn=lambda: gr.update(value="기 (起 - 도입)"),
+            inputs=[],
+            outputs=[case_stage_select]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
         )
         
         btn_create_project.click(
@@ -2706,6 +3947,18 @@ def build_ui():
                 target_scenario_dropdown,
                 active_characters
             ]
+        ).then(
+            fn=lambda: gr.update(value="기 (起 - 도입)"),
+            inputs=[],
+            outputs=[case_stage_select]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
         )
 
         btn_load_scen_node_gen.click(
@@ -2809,6 +4062,10 @@ def build_ui():
             fn=on_character_select_change,
             inputs=[char_dropdown],
             outputs=[char_name, char_role, char_personality, char_background, char_relations, char_speech_style]
+        ).then(
+            fn=get_character_version_choices_update,
+            inputs=[char_dropdown],
+            outputs=[char_version_dropdown]
         )
 
         btn_add_char.click(
@@ -2819,6 +4076,10 @@ def build_ui():
             fn=update_active_characters_checkbox,
             inputs=[project_dropdown],
             outputs=[active_characters]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
         )
 
         btn_delete_char.click(
@@ -2829,6 +4090,10 @@ def build_ui():
             fn=update_active_characters_checkbox,
             inputs=[project_dropdown],
             outputs=[active_characters]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
         )
 
         btn_save_character_detail.click(
@@ -2839,6 +4104,10 @@ def build_ui():
             fn=update_active_characters_checkbox,
             inputs=[project_dropdown],
             outputs=[active_characters]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
         )
 
         btn_generate_characters.click(
@@ -2849,6 +4118,44 @@ def build_ui():
             fn=update_active_characters_checkbox,
             inputs=[project_dropdown],
             outputs=[active_characters]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
+        )
+
+        # Character Version history handlers
+        btn_save_char_version.click(
+            fn=save_character_version,
+            inputs=[
+                char_dropdown,
+                char_ver_name_input,
+                char_name,
+                char_role,
+                char_personality,
+                char_background,
+                char_relations,
+                char_speech_style
+            ],
+            outputs=[char_version_dropdown, char_ver_name_input]
+        )
+
+        btn_load_char_version.click(
+            fn=load_character_version,
+            inputs=[char_version_dropdown],
+            outputs=[char_name, char_role, char_personality, char_background, char_relations, char_speech_style]
+        )
+
+        btn_delete_char_version.click(
+            fn=delete_character_version,
+            inputs=[char_version_dropdown, char_dropdown],
+            outputs=[char_version_dropdown]
+        )
+
+        btn_edit_char_version.click(
+            fn=edit_character_version,
+            inputs=[char_version_dropdown, new_char_ver_name_input, char_dropdown],
+            outputs=[char_version_dropdown, new_char_ver_name_input]
         )
 
         btn_refine_scene.click(
@@ -2912,34 +4219,38 @@ def build_ui():
             fn=refresh_target_scenario_dropdown,
             inputs=[project_dropdown],
             outputs=[target_scenario_dropdown]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
         )
         
         scen_stage_dropdown.change(
-            fn=on_stage_change,
+            fn=on_scen_stage_change,
             inputs=[project_dropdown, scen_stage_dropdown],
-            outputs=[scen_node_dropdown, scen_ver_dropdown, scen_content_box, scen_title_box, scen_regen_prompt]
+            outputs=[scen_node_dropdown, case_node_select, scen_ver_dropdown, case_ver_select, scen_content_box, case_content_input, scen_title_box, case_title_input, scen_regen_prompt]
         )
         
         scen_node_dropdown.change(
-            fn=on_node_change,
+            fn=on_scen_node_change,
             inputs=[project_dropdown, scen_stage_dropdown, scen_node_dropdown],
-            outputs=[scen_ver_dropdown, scen_content_box, scen_title_box, scen_regen_prompt]
+            outputs=[scen_ver_dropdown, case_ver_select, scen_content_box, case_content_input, scen_title_box, case_title_input, scen_regen_prompt]
         )
         
         scen_ver_dropdown.change(
-            fn=on_ver_change,
+            fn=on_scen_ver_change,
             inputs=[scen_ver_dropdown],
-            outputs=[scen_content_box, scen_title_box, scen_regen_prompt]
+            outputs=[scen_content_box, case_content_input, scen_title_box, case_title_input, scen_regen_prompt]
         )
         
-        scen_title_box.change(
+        scen_title_box.input(
             fn=update_radio_title_on_type,
             inputs=[project_dropdown, scen_stage_dropdown, scen_node_dropdown, scen_title_box],
             outputs=[scen_node_dropdown]
         )
         
         btn_commit_ver.click(
-            fn=commit_new_scenario_version,
+            fn=on_scen_commit_ver,
             inputs=[
                 project_dropdown,
                 scen_stage_dropdown,
@@ -2950,30 +4261,43 @@ def build_ui():
                 scen_ver_dropdown,
                 scen_regen_prompt
             ],
-            outputs=[scen_ver_dropdown, scen_node_dropdown, scen_commit_msg]
-        ).then(
-            fn=refresh_target_scenario_dropdown,
-            inputs=[project_dropdown],
-            outputs=[target_scenario_dropdown]
+            outputs=[
+                scen_ver_dropdown,
+                case_ver_select,
+                scen_node_dropdown,
+                case_node_select,
+                target_scenario_dropdown,
+                scen_content_box,
+                case_content_input,
+                scen_title_box,
+                case_title_input,
+                scen_commit_msg
+            ]
         )
         
         btn_delete_ver.click(
-            fn=delete_scenario_version,
+            fn=on_scen_delete_ver,
             inputs=[
                 project_dropdown,
                 scen_stage_dropdown,
                 scen_node_dropdown,
                 scen_ver_dropdown
             ],
-            outputs=[scen_ver_dropdown, scen_node_dropdown, scen_content_box, scen_title_box]
-        ).then(
-            fn=refresh_target_scenario_dropdown,
-            inputs=[project_dropdown],
-            outputs=[target_scenario_dropdown]
+            outputs=[
+                scen_ver_dropdown,
+                case_ver_select,
+                scen_node_dropdown,
+                case_node_select,
+                target_scenario_dropdown,
+                scen_content_box,
+                case_content_input,
+                scen_title_box,
+                case_title_input
+            ]
         )
         
         btn_save_scen_ver.click(
-            fn=save_current_scenario_version,
+            fn=on_scen_save_ver,
             inputs=[
                 project_dropdown,
                 scen_stage_dropdown,
@@ -2985,10 +4309,14 @@ def build_ui():
             ],
             outputs=[
                 scen_ver_dropdown,
+                case_ver_select,
                 scen_node_dropdown,
+                case_node_select,
                 target_scenario_dropdown,
                 scen_content_box,
-                scen_title_box
+                case_content_input,
+                scen_title_box,
+                case_title_input
             ]
         )
         
@@ -3030,6 +4358,10 @@ def build_ui():
             fn=refresh_target_scenario_dropdown,
             inputs=[project_dropdown],
             outputs=[target_scenario_dropdown]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
         )
 
         btn_delete_node.click(
@@ -3040,6 +4372,10 @@ def build_ui():
             fn=refresh_target_scenario_dropdown,
             inputs=[project_dropdown],
             outputs=[target_scenario_dropdown]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
         )
 
         # 전체 시나리오 내보내기 핸들러
@@ -3107,6 +4443,27 @@ def build_ui():
         ).then(
             fn=None,
             inputs=[novels_clipboard_hidden],
+            outputs=[],
+            js="(text) => { if(text) { navigator.clipboard.writeText(text).then(() => {}).catch(err => console.error('Clipboard write failed:', err)); } }"
+        )
+        
+        btn_export_chars_txt.click(
+            fn=export_characters_as_txt,
+            inputs=[project_dropdown],
+            outputs=[char_download_file]
+        ).then(
+            fn=lambda x: gr.update(visible=True) if x else gr.update(visible=False),
+            inputs=[char_download_file],
+            outputs=[char_download_file]
+        )
+
+        btn_copy_chars_clipboard.click(
+            fn=copy_characters_to_clipboard,
+            inputs=[project_dropdown],
+            outputs=[char_clipboard_hidden]
+        ).then(
+            fn=None,
+            inputs=[char_clipboard_hidden],
             outputs=[],
             js="(text) => { if(text) { navigator.clipboard.writeText(text).then(() => {}).catch(err => console.error('Clipboard write failed:', err)); } }"
         )

@@ -1,0 +1,5 @@
+Name: 사토 (佐藤), Relations: male_hero
+Name: 케이코 (景子), Relations: female_hero
+Name: 쇼타로 (正太郎), Relations: male_sub
+Name: 유키의 어머니, Relations: female_sub
+Name: 유키 (祐希), Relations: male_sub
