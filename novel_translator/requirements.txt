@@ -1,0 +1,3 @@
+# Novel Translator - Additional Dependencies
+# (gradio, requests are already in root .venv)
+chardet>=5.0.0
