@@ -1,0 +1,64 @@
+=== GIT STATUS ===
+HEAD detached at bb50c70
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	abyss_writer/models.py
+	check.py
+	check_db.py
+	check_g.py
+	check_git.py
+	check_git_history.py
+	check_git_status.py
+	check_log2.py
+	check_log_truncation.py
+	check_proj8.py
+	check_pyc_time.py
+	check_times.py
+	check_truncation.py
+	dry_run_replay.py
+	dry_run_temp/
+	fix_ui.ps1
+	fix_ui.py
+	git_diff.txt
+	inspect_file.py
+	kill_server.py
+	list_brain_folders.py
+	ncs_writer/
+	output.txt
+	print_tool_calls.py
+	restore_and_update.py
+	run_abyss_writer.bat
+	run_abyss_writer.py
+	run_git.bat
+	run_git_log.py
+	run_git_stash.py
+	run_ncs_writer.bat
+	search_all_commits.py
+	search_all_edits.py
+	search_appdata_ui.py
+	search_backups.py
+	search_current_log.py
+	search_main_edits.py
+	search_overview.py
+
+nothing added to commit but untracked files present (use "git add" to track)
+
+
+=== GIT LOG ===
+bb50c70 Fix scenario node title sync, version defaulting to latest, and save diff update
+4f34ee5 feat: implement divide-and-conquer novel summarization for LLM context optimization & stabilize asset preview and toggle
+ad7a6f6 Fix asset preview thumbnails by adding st_mtime cache-buster to file_path to bypass browser cache errors
+ff43816 fix: fully URL-encode both project_name and entry.name to prevent double-encoding by the browser, resolving all preview issues for non-ASCII and special characters
+d7bcdb8 fix: URL-encode asset image paths to support special characters like hash (#) and spaces in filenames, restoring preview thumbnails
+1b84454 feat: enhance AI overall plot generation to dynamically incorporate full generated novel manuscript text as context
+1df48b7 feat: enhance AI theme and character profiling to dynamically incorporate full generated novel manuscript text as context
+ae3ba6e feat: automatically generate world setting (theme_background) and character relationships (character_profiles) when image analysis finishes
+ab0e828 feat: complete robust fullstack novelization dashboard with local timezone fixes, auto-scroll and advanced port-release launcher
+
+
+=== GIT BRANCH ===
+* (HEAD detached at bb50c70)
+  main
+  remotes/origin/main
+
+

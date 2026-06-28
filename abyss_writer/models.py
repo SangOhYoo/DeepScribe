@@ -24,6 +24,7 @@ class Project(Base):
     plots = relationship("Plot", back_populates="project", cascade="all, delete-orphan")
     scenario_nodes = relationship("ScenarioNode", back_populates="project", cascade="all, delete-orphan")
     prompt_versions = relationship("PromptVersion", back_populates="project", cascade="all, delete-orphan")
+    erotic_scenario_versions = relationship("EroticScenarioVersion", back_populates="project", cascade="all, delete-orphan")
 
 class Character(Base):
     __tablename__ = 'characters'
@@ -36,6 +37,12 @@ class Character(Base):
     key_quotes = Column(Text)
     relations = Column(Text)
     character_relations = Column(Text)
+    
+    physical_signature = Column(Text)
+    psychological_trigger = Column(Text)
+    behavioral_quirks = Column(Text)
+    secret_taboo = Column(Text)
+    signature_quotes = Column(Text)
 
     project = relationship("Project", back_populates="characters")
     versions = relationship("CharacterVersion", back_populates="character", cascade="all, delete-orphan")
@@ -52,6 +59,13 @@ class CharacterVersion(Base):
     key_quotes = Column(Text)
     relations = Column(Text)
     character_relations = Column(Text)
+    
+    physical_signature = Column(Text)
+    psychological_trigger = Column(Text)
+    behavioral_quirks = Column(Text)
+    secret_taboo = Column(Text)
+    signature_quotes = Column(Text)
+    
     created_at = Column(DateTime, default=datetime.utcnow)
 
     character = relationship("Character", back_populates="versions")
@@ -125,6 +139,26 @@ class PromptVersion(Base):
     project = relationship("Project", back_populates="prompt_versions")
 
 
+class EroticScenarioVersion(Base):
+    __tablename__ = 'erotic_scenario_versions'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(Integer, ForeignKey('projects.id'))
+    version_name = Column(String(100), nullable=False)
+    female_desc = Column(Text)
+    male_desc = Column(Text)
+    relations_desc = Column(Text)
+    situation_desc = Column(Text)
+    sensory_enabled = Column(Integer, default=1)
+    contrast_enabled = Column(Integer, default=1)
+    buildup_enabled = Column(Integer, default=1)
+    num_cases = Column(Integer, default=3)
+    generated_markdown = Column(Text)
+    parsed_cases_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", back_populates="erotic_scenario_versions")
+
+
 # Database Initialization
 def init_db(db_path="sqlite:///d:/DeepScribe/abyss_writer/abyss_writer.db"):
     os.makedirs("d:/DeepScribe/abyss_writer", exist_ok=True)
@@ -174,6 +208,22 @@ def init_db(db_path="sqlite:///d:/DeepScribe/abyss_writer/abyss_writer.db"):
         with engine.begin() as conn:
             if "character_relations" not in columns:
                 conn.execute(sa.text("ALTER TABLE characters ADD COLUMN character_relations TEXT"))
+            for col in ["physical_signature", "psychological_trigger", "behavioral_quirks", "secret_taboo", "signature_quotes"]:
+                if col not in columns:
+                    conn.execute(sa.text(f"ALTER TABLE characters ADD COLUMN {col} TEXT"))
+
+    if "character_versions" in inspector.get_table_names():
+        columns = [c["name"] for c in inspector.get_columns("character_versions")]
+        with engine.begin() as conn:
+            for col in ["physical_signature", "psychological_trigger", "behavioral_quirks", "secret_taboo", "signature_quotes"]:
+                if col not in columns:
+                    conn.execute(sa.text(f"ALTER TABLE character_versions ADD COLUMN {col} TEXT"))
+
+    if "erotic_scenario_versions" in inspector.get_table_names():
+        columns = [c["name"] for c in inspector.get_columns("erotic_scenario_versions")]
+        with engine.begin() as conn:
+            if "parsed_cases_json" not in columns:
+                conn.execute(sa.text("ALTER TABLE erotic_scenario_versions ADD COLUMN parsed_cases_json TEXT"))
 
     Base.metadata.create_all(engine)
     from sqlalchemy.orm import scoped_session

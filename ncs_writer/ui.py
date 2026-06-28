@@ -1920,6 +1920,28 @@ def build_ui():
                             interactive=False
                         )
         
+        # Collapsible Prompt Monitoring Accordion at the bottom of the page
+        with gr.Accordion("🔍 최근 실행된 AI 프롬프트 실시간 모니터링 (System & User Prompt)", open=True):
+            gr.Markdown("가장 최근에 실행한 AI 생성 작업의 실제 LLM 전송 프롬프트입니다.")
+            with gr.Row():
+                monitor_system_prompt = gr.Textbox(
+                    label="🖥️ 전송된 System Prompt",
+                    placeholder="AI 생성 버튼을 누르면 여기에 실제 전송된 System Prompt가 나타납니다.",
+                    lines=8,
+                    max_lines=20,
+                    interactive=False
+                )
+                monitor_user_prompt = gr.Textbox(
+                    label="👤 전송된 User Prompt",
+                    placeholder="AI 생성 버튼을 누르면 여기에 실제 전송된 User Prompt가 나타납니다.",
+                    lines=8,
+                    max_lines=20,
+                    interactive=False
+                )
+
+        def show_last_prompts():
+            return llama_client.last_system_prompt, llama_client.last_user_prompt
+
         # --- TAB 1 Bindings (NCS Learning Module) ---
         
         # 1. Update Preview Event Bindings
@@ -2126,6 +2148,10 @@ def build_ui():
             fn=auto_save_obj,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_know.click(
@@ -2136,6 +2162,10 @@ def build_ui():
             fn=auto_save_know,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_content.click(
@@ -2146,6 +2176,10 @@ def build_ui():
             fn=auto_save_content,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_steps.click(
@@ -2156,6 +2190,10 @@ def build_ui():
             fn=auto_save_steps,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_tips.click(
@@ -2166,6 +2204,10 @@ def build_ui():
             fn=auto_save_tips,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         # 3. All-in-one module generator
@@ -2177,6 +2219,10 @@ def build_ui():
             fn=auto_save_all_mod,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
 
         # --- TAB 2 Bindings (NCS Standards) ---
@@ -2189,6 +2235,10 @@ def build_ui():
             fn=auto_save_all_ncs,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_ksa.click(
@@ -2199,6 +2249,10 @@ def build_ui():
             fn=auto_save_ksa,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_range.click(
@@ -2209,6 +2263,10 @@ def build_ui():
             fn=auto_save_range,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
         
         btn_gen_assessment.click(
@@ -2219,6 +2277,10 @@ def build_ui():
             fn=auto_save_assessment,
             inputs=[project_dd] + state_fields,
             outputs=[version_dd]
+        ).then(
+            fn=show_last_prompts,
+            inputs=[],
+            outputs=[monitor_system_prompt, monitor_user_prompt]
         )
 
         # --- Project Selector Event Bindings ---

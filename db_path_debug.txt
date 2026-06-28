@@ -1,0 +1,1 @@
+sqlite:///d:/DeepScribe/abyss_writer/abyss_writer.db

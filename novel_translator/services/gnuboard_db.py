@@ -301,7 +301,7 @@ def get_posts_details(bo_table, wr_ids):
 
 def register_post_to_gnuboard(
     bo_table, subject, content, ca_name, mb_id="admin", wr_name="최고관리자",
-    wr_datetime=None, wr_1="", wr_link1=""
+    wr_datetime=None, wr_1="", wr_link1="", wr_option=""
 ):
     """Registers or updates a post in the target Gnuboard table, matching PHP logic."""
     import datetime
@@ -340,10 +340,11 @@ def register_post_to_gnuboard(
                             wr_datetime = %s,
                             wr_last = %s,
                             wr_link1 = %s,
-                            wr_1 = %s
+                            wr_1 = %s,
+                            wr_option = %s
                         WHERE wr_id = %s
                     """
-                    cur.execute(update_sql, (content, wr_datetime, now_str, wr_link1, wr_1, stored_wr_id))
+                    cur.execute(update_sql, (content, wr_datetime, now_str, wr_link1, wr_1, wr_option, stored_wr_id))
                     conn.commit()
                     logger.info(f" [Update] {subject} (ID: {stored_wr_id})")
                     return f"updated:{stored_wr_id}"
@@ -374,6 +375,7 @@ def register_post_to_gnuboard(
                 'wr_last': now_str,
                 'wr_ip': '127.0.0.1',
                 'wr_1': wr_1 or "",
+                'wr_option': wr_option,
             }
             
             # 그누보드 표준 필드들의 기본값 매핑
@@ -518,4 +520,3 @@ class GnuboardDB:
             wr_1="",
             wr_link1=original_url
         )
-

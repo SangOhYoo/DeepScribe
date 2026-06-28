@@ -15,6 +15,65 @@ from engine.tracker import TimelineTracker
 
 # Initialize Engine Components
 db_session = init_db()
+
+# Database correction for project 8 mismatch
+try:
+    from models import Project
+    proj8 = db_session.query(Project).filter(Project.id == 8).first()
+    if proj8 and proj8.overall_plot and "남편의 빚" in proj8.overall_plot:
+        proj8.overall_plot = (
+            "30대 중반 미망인 스미래의 집으로 20대 초반 대학생 히로시가 하숙생으로 들어오며 벌어지는 관능적인 로맨스 소설입니다. "
+            "정숙한 미망인의 가면 속에 숨겨진 스미래의 강렬한 성적 결핍과, 순진하지만 거부할 수 없는 본능에 흔들리는 하숙생 히로시 "
+            "사이의 위태로운 관계가 폭우 속에서 점차 파국으로 치달으며 전개됩니다."
+        )
+        db_session.commit()
+        print("[DATABASE CORRECTION] Fixed overall plot for project 8 (동정-스미래)")
+except Exception as e:
+    print("[DATABASE CORRECTION] Error correcting database:", e)
+
+# Automatically update Project.updated_at when modifications are made to child elements
+from sqlalchemy import event
+from sqlalchemy.orm import Session
+
+@event.listens_for(Session, 'before_flush')
+def before_flush(session, flush_context, instances):
+    from datetime import datetime
+    from models import Project, Character, ScenarioNode, PromptVersion, CharacterVersion
+    project_ids = set()
+    for obj in session.new.union(session.dirty):
+        if isinstance(obj, Project):
+            pass
+        elif isinstance(obj, Character):
+            project_ids.add(obj.project_id)
+        elif isinstance(obj, ScenarioNode):
+            project_ids.add(obj.project_id)
+        elif isinstance(obj, PromptVersion):
+            project_ids.add(obj.project_id)
+        elif isinstance(obj, CharacterVersion):
+            if obj.character:
+                project_ids.add(obj.character.project_id)
+            elif obj.character_id:
+                with session.no_autoflush:
+                    char = session.query(Character).filter(Character.id == obj.character_id).first()
+                    if char:
+                        project_ids.add(char.project_id)
+                        
+    for obj in session.deleted:
+        if isinstance(obj, Character):
+            project_ids.add(obj.project_id)
+        elif isinstance(obj, ScenarioNode):
+            project_ids.add(obj.project_id)
+        elif isinstance(obj, PromptVersion):
+            project_ids.add(obj.project_id)
+            
+    if project_ids:
+        with session.no_autoflush:
+            for pid in project_ids:
+                if pid:
+                    proj = session.query(Project).filter(Project.id == pid).first()
+                    if proj:
+                        proj.updated_at = datetime.utcnow()
+
 llama_client = LlamaAPIClient()
 router = ContextRouter(db_session)
 synthesizer = MultiPOVSynthesizer(llama_client)
@@ -39,7 +98,8 @@ def parse_project_id(project_str: str) -> int:
 
 def get_project_list():
     try:
-        projects = db_session.query(Project).all()
+        db_session.expire_all()
+        projects = db_session.query(Project).order_by(Project.updated_at.desc(), Project.id.desc()).all()
         if not projects:
             default_proj = Project(title="기본 프로젝트", genre="드라마", status="Draft")
             db_session.add(default_proj)
@@ -163,6 +223,127 @@ def build_commit_tree_choices(project_id, stage, node_index):
         
     return choices
 
+def get_character_tree_html(project_str):
+    import json
+    if not project_str:
+        return "<div class='tree-container'><p style='color: #6c7086; font-size: 13px; text-align: center;'>선택된 프로젝트가 없습니다.</p></div>"
+    pid = parse_project_id(project_str)
+    try:
+        characters = db_session.query(Character).filter(Character.project_id == pid).all()
+        
+        # Group characters by role
+        roles_ordered = [
+            ('male_hero', '남자 주인공'),
+            ('female_hero', '여자 주인공'),
+            ('male_sub', '남자 조연'),
+            ('female_sub', '여자 조연'),
+            ('other', '기타')
+        ]
+        
+        # Build mapping for client-side fallback
+        char_id_map = {}
+        for char in characters:
+            char_id_map[char.name.strip()] = str(char.id)
+            
+        html = """
+        <style>
+            #char_dropdown_hidden {
+                display: none !important;
+            }
+            #char_tree_sync_btn {
+                position: absolute !important;
+                left: -9999px !important;
+                top: -9999px !important;
+                width: 1px !important;
+                height: 1px !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+                display: block !important;
+            }
+            .tree-container {
+                font-family: 'Inter', sans-serif;
+                padding: 12px;
+                background: transparent;
+                border: none;
+                max-height: 450px;
+                overflow-y: auto;
+            }
+            .tree-folder {
+                font-weight: 700;
+                color: var(--primary-500, #8b5cf6); /* Vibrant theme-aware folder color */
+                margin-top: 12px;
+                margin-bottom: 6px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 14px;
+            }
+            .tree-node {
+                padding: 8px 12px 8px 28px;
+                margin: 4px 0;
+                cursor: pointer;
+                border-radius: 6px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 13px;
+                transition: all 0.2s ease;
+                position: relative;
+                color: var(--body-text-color, #e2e8f0); /* Theme-aware text color */
+            }
+            .tree-node::before {
+                content: '';
+                position: absolute;
+                left: 14px;
+                top: 0;
+                bottom: 0;
+                width: 1px;
+                background: var(--border-color-primary, #4b5563); /* Theme-aware tree connector lines */
+            }
+            .tree-node:hover {
+                background: var(--table-row-focus, var(--neutral-100, #374151)); /* Theme-aware hover state */
+                color: var(--primary-500, #c084fc);
+            }
+            .tree-node.active {
+                background: var(--primary-600, #8b5cf6) !important;
+                color: #ffffff !important;
+                font-weight: 700;
+            }
+            .tree-node.active::before {
+                background: #ffffff;
+            }
+            #char_tree_selected_input, #char_tree_sync_btn, #char_dropdown_hidden {
+                display: none !important;
+                height: 0px !important;
+                margin: 0px !important;
+                padding: 0px !important;
+                overflow: hidden !important;
+                border: none !important;
+            }
+        </style>
+        <div class="tree-container">
+        """
+        
+        # Generate grouped elements
+        for role_key, role_label in roles_ordered:
+            role_chars = [c for c in characters if c.relations == role_key]
+            if role_chars:
+                # Add folder
+                html += f'<div class="tree-folder">📂 {role_label}</div>'
+                for char in role_chars:
+                    # Render node with standard id (e.g. node-{id})
+                    html += f'<div class="tree-node" id="node-{char.id}">👤 {char.name}</div>'
+                    
+        # Append hidden input containing character mapping
+        map_json = json.dumps(char_id_map, ensure_ascii=False)
+        html += f'<input type="hidden" id="char_id_map" value=\'{map_json}\' />'
+        html += "</div>"
+        
+        return html
+    except Exception as e:
+        print("Error rendering character tree:", e)
+        return "<div class='tree-container'><p style='color: #f38ba8; font-size: 13px; text-align: center;'>데이터 로드 에러</p></div>"
+
 def get_character_dropdown_choices(project_str):
     if not project_str:
         return []
@@ -183,6 +364,11 @@ def get_character_dropdown_choices(project_str):
     except Exception as e:
         print("Error getting character dropdown choices:", e)
         return []
+
+def on_char_tree_select_full(selected_id):
+    if not selected_id:
+        return gr.update()
+    return gr.update(value=selected_id)
 
 def get_character_names(project_str):
     if not project_str:
@@ -262,6 +448,26 @@ def save_or_update_character(project_str, char_id, name, role, personality, back
             db_session.commit()
             gr.Info(f"새로운 등장인물 '{char.name}'이 추가되었습니다.")
             
+        # Automatically save a new version snapshot on save/edit
+        try:
+            from datetime import datetime
+            ver_name = f"사용자 수정본 ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+            new_ver = CharacterVersion(
+                character_id=char.id,
+                version_name=ver_name,
+                name=char.name,
+                relations=char.relations,
+                personality=char.personality,
+                background=char.background,
+                character_relations=char.character_relations,
+                speech_style=char.speech_style
+            )
+            db_session.add(new_ver)
+            db_session.commit()
+            print(f"[AbyssWriter] Automatically created history version: {ver_name}")
+        except Exception as e:
+            print("[AbyssWriter] Error creating automatic history version:", e)
+            
         choices = get_character_dropdown_choices(project_str)
         return gr.update(choices=choices, value=char.id), gr.update(), name, role, personality, background, relations_desc, speech_style
     except Exception as e:
@@ -315,6 +521,12 @@ def delete_selected_character(project_str, char_id):
     except Exception as e:
         print("Error deleting character:", e)
         return gr.update(), "", "other", "", "", "", ""
+
+def on_page_load():
+    db_session.expire_all()
+    updated_choices = get_project_list()
+    default_val = updated_choices[0] if updated_choices else None
+    return gr.update(choices=updated_choices, value=default_val)
 
 def load_project_details(project_str):
     if not project_str:
@@ -929,7 +1141,7 @@ Case [번호]. [케이스의 명칭/테마]
 """
 
     accumulated = ""
-    yield "⏳ 생성 시작 중...", [], gr.update(choices=[], value=None)
+    yield "⏳ 생성 시작 중...", [], gr.update(choices=[], value=[])
     
     try:
         for token in llama_client.stream_chat_completion(
@@ -938,35 +1150,51 @@ Case [번호]. [케이스의 명칭/테마]
             temperature=0.85
         ):
             accumulated += token
-            yield accumulated, [], gr.update(choices=[], value=None)
+            yield accumulated, [], gr.update(choices=[], value=[])
             
         cases = parse_scenario_cases(accumulated)
         choices = [f"Case {c['number']}. {c['title']}" for c in cases]
-        default_choice = choices[0] if choices else None
+        default_choice = [choices[0]] if choices else []
         
         yield accumulated, cases, gr.update(choices=choices, value=default_choice)
     except Exception as e:
         print("Error in generating cases:", e)
-        yield f"⚠️ 오류가 발생했습니다: {str(e)}", [], gr.update(choices=[], value=None)
+        yield f"⚠️ 오류가 발생했습니다: {str(e)}", [], gr.update(choices=[], value=[])
 
-def load_selected_case_details(selected_case_str, parsed_cases):
-    if not selected_case_str or not parsed_cases:
+def load_selected_case_details(selected_cases, parsed_cases):
+    if not selected_cases or not parsed_cases:
         return "", "", ""
-    
+        
+    if isinstance(selected_cases, str):
+        selected_cases = [selected_cases]
+        
     import re
-    match = re.search(r'Case\s*(\d+)', selected_case_str)
-    if not match:
-        return "", "", ""
+    titles = []
+    contents = []
+    metas = []
     
-    case_num = int(match.group(1))
-    for c in parsed_cases:
-        if c["number"] == case_num:
-            title = c["title"]
-            desc = c["description"]
-            meta = f"심리적 전략: {c['strategy']}\n\n자극 포인트: {c['trigger']}"
-            return title, desc, meta
+    for case_str in selected_cases:
+        if not case_str:
+            continue
+        match = re.search(r'Case\s*(\d+)', case_str)
+        if not match:
+            titles.append(case_str)
+            contents.append(case_str)
+            continue
             
-    return "", "", ""
+        case_num = int(match.group(1))
+        for c in parsed_cases:
+            if c["number"] == case_num:
+                titles.append(c["title"])
+                contents.append(c["description"])
+                metas.append(f"[{c['number']}번 케이스 - {c['title']}]\n심리적 전략: {c['strategy']}\n자극 포인트: {c['trigger']}")
+                break
+                
+    joined_title = " / ".join(titles)
+    joined_content = "\n\n".join(contents)
+    joined_meta = "\n\n".join(metas)
+    
+    return joined_title, joined_content, joined_meta
 
 def insert_case_to_scenario_node(project_str, stage, insert_position, current_node_index, case_title, case_content):
     if not project_str or not stage:
@@ -2113,6 +2341,9 @@ def api_generate_characters(project_str):
     system_instruction = (
         "You are an expert novel planner. "
         "Your task is to analyze the overall plot and genre of a novel, and design compelling character profiles and relationships. "
+        "CRITICAL: Character names MUST match the cultural/geographical setting of the story. "
+        "For example, if the story is set in Japan, use Japanese names (e.g. 히로시, 유키, 사토). "
+        "If set in Korea, use Korean names. If set in China, use Chinese names. Analyze the plot carefully to determine the setting. "
         "You must generate exactly: "
         "1. One Male Hero (남자 주인공): name, personality (가면), background (결핍), character_relations (관계 역학), speech_style (말투). "
         "2. One Female Hero (여자 주인공): name, personality, background, character_relations, speech_style. "
@@ -2127,43 +2358,21 @@ def api_generate_characters(project_str):
         f"장르: {proj.genre or '드라마'}\n"
         f"전체 소설 줄거리:\n{proj.overall_plot or '줄거리 없음'}\n\n"
         f"Please design the characters and their relationships according to the story. "
+        f"IMPORTANT: Determine the story's setting (country/culture) from the plot above and use culturally appropriate names. "
+        f"Do NOT default to Korean names if the story is set in another country. "
         f"The output must be a valid JSON object with the following schema:\n"
         f"{{\n"
         f"  \"male_hero\": {{\n"
-        f"    \"name\": \"이름/나이/지위 (예: 강이현 / 34세 / 본부장)\",\n"
+        f"    \"name\": \"이름/나이/지위 (줄거리 배경에 맞는 이름 사용)\",\n"
         f"    \"personality\": \"겉으로 드러나는 가면 (표면적 성격)\",\n"
         f"    \"background\": \"숨겨진 결핍 및 본능\",\n"
         f"    \"character_relations\": \"심층 역학 (표면적 역학 vs 무의식적 긴장 등)\",\n"
         f"    \"speech_style\": \"공적인 공간 vs 사적인 공간 호칭과 말투 변화\"\n"
         f"  }},\n"
-        f"  \"female_hero\": {{\n"
-        f"    \"name\": \"...\",\n"
-        f"    \"personality\": \"...\",\n"
-        f"    \"background\": \"...\",\n"
-        f"    \"character_relations\": \"...\",\n"
-        f"    \"speech_style\": \"...\"\n"
-        f"  }},\n"
-        f"  \"male_sub\": {{\n"
-        f"    \"name\": \"...\",\n"
-        f"    \"personality\": \"...\",\n"
-        f"    \"background\": \"...\",\n"
-        f"    \"character_relations\": \"...\",\n"
-        f"    \"speech_style\": \"...\"\n"
-        f"  }},\n"
-        f"  \"female_sub\": {{\n"
-        f"    \"name\": \"...\",\n"
-        f"    \"personality\": \"...\",\n"
-        f"    \"background\": \"...\",\n"
-        f"    \"character_relations\": \"...\",\n"
-        f"    \"speech_style\": \"...\"\n"
-        f"  }},\n"
-        f"  \"other\": {{\n"
-        f"    \"name\": \"...\",\n"
-        f"    \"personality\": \"...\",\n"
-        f"    \"background\": \"...\",\n"
-        f"    \"character_relations\": \"...\",\n"
-        f"    \"speech_style\": \"...\"\n"
-        f"  }}\n"
+        f"  \"female_hero\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }},\n"
+        f"  \"male_sub\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }},\n"
+        f"  \"female_sub\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }},\n"
+        f"  \"other\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }}\n"
         f"}}\n"
         f"Write all character details strictly in Korean, aligning with the story tone."
     )
@@ -2218,6 +2427,27 @@ def api_generate_characters(project_str):
                 )
                 db_session.add(char)
                 db_session.commit()
+                
+                # Automatically save history snapshot for AI-generated characters
+                try:
+                    from datetime import datetime
+                    ver_name = f"AI 생성본 ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+                    new_ver = CharacterVersion(
+                        character_id=char.id,
+                        version_name=ver_name,
+                        name=char.name,
+                        relations=char.relations,
+                        personality=char.personality,
+                        background=char.background,
+                        character_relations=char.character_relations,
+                        speech_style=char.speech_style
+                    )
+                    db_session.add(new_ver)
+                    db_session.commit()
+                    print(f"[AbyssWriter] Automatically created history version for generated character: {ver_name}")
+                except Exception as e:
+                    print("[AbyssWriter] Error creating automatic generated history version:", e)
+                    
                 if first_char_id is None:
                     first_char_id = char.id
                     
@@ -2227,13 +2457,14 @@ def api_generate_characters(project_str):
         print("Error during AI character generation:", e)
         gr.Warning("AI 프로필 생성 중 오류가 발생하여 기본 템플릿으로 대체합니다.")
         
-        # Fallback templates
+        # Fallback templates - use project title for context
+        fallback_title = proj.title or '드라마'
         templates = [
-            ("강민준 / 32세 / 검사", "male_hero", "냉정하고 철저한 원칙주의자.", "내면의 상처로 인한 타인에 대한 불신과 통제욕구.", "서연우(여주): 공조 관계이나 무의식적으로 이끌림. 김영철(조연): 표면적으로만 신뢰.", "공적: '서연우 씨', 차가운 존댓말 / 사적: '너', 억눌린 텐션의 반말"),
-            ("서연우 / 29세 / 기자", "female_hero", "따뜻한 성품과 남다른 직관력.", "과거 사건에 대한 죄책감과 인정욕구.", "강민준(남주): 경계심과 호기심이 교차함. 박소현(조연): 적대적 갈등 구조.", "공적: '강 검사님', 깍듯한 톤 / 사적: '민준 씨', 감정이 묻어나는 톤"),
-            ("김영철 / 40세 / 수사관", "male_sub", "우직하고 우호적인 맏형.", "과도한 충성심으로 인한 시야 협착.", "강민준(남주): 절대적 복종. 서연우(여주): 경계하는 태도.", "공적/사적 일관되게 투박한 말투"),
-            ("박소현 / 35세 / 정보 브로커", "female_sub", "비밀을 쥐고 있는 의문의 여인.", "물질적 욕망과 애정 결핍.", "서연우(여주): 감시와 대치 관계. 강민준(남주): 이용하려는 관계.", "나른하고 여유로우며 상대를 도발하는 말투"),
-            ("최 형사 / 45세", "other", "자애로운 후원자의 탈을 씀.", "파괴적인 성향과 절대 권력욕.", "강민준(남주): 장기말처럼 이용. 박소현(조연): 필요에 의해 거래.", "상대의 심리를 압박하는 나긋나긋한 존댓말")
+            (f"남자 주인공 / 30대 / {fallback_title}", "male_hero", f"냉정하고 철저한 성격의 소유자. {fallback_title}의 소용돌이 속에서 진실을 밝히기 위해 투쟁한다.", "내면의 상처로 인한 타인에 대한 불신과 통제욕구.", "여주인공과 공조 관계이나 무의식적으로 이끌림.", "공적: 존댓말 / 사적: 억눌린 텐션의 반말"),
+            (f"여자 주인공 / 20대 / {fallback_title}", "female_hero", f"따뜻한 성품과 남다른 직관력을 지닌 인물. {fallback_title}의 진실을 마주하고 갈등과 성장을 겪는다.", "과거 사건에 대한 죄책감과 인정욕구.", "남주인공과 경계심과 호기심이 교차하는 관계.", "공적: 깍듯한 톤 / 사적: 감정이 묻어나는 톤"),
+            (f"남자 조연 / 30대", "male_sub", "우직하고 우호적인 조력자.", "과도한 충성심으로 인한 시야 협착.", "남주인공: 신뢰 관계. 여주인공: 경계하는 태도.", "공적/사적 일관되게 투박한 말투"),
+            (f"여자 조연 / 30대", "female_sub", "비밀을 쥐고 있는 의문의 인물.", "물질적 욕망과 애정 결핍.", "여주인공과 대치 관계. 남주인공을 이용하려 함.", "나른하고 여유로우며 상대를 도발하는 말투"),
+            (f"기타 인물 / 40대", "other", "자애로운 후원자의 탈을 씀.", "파괴적인 성향과 절대 권력욕.", "남주인공을 장기말처럼 이용.", "상대의 심리를 압박하는 나긋나긋한 존댓말")
         ]
         
         for name, rel, personality, background, rel_desc, speech_style in templates:
@@ -2248,6 +2479,27 @@ def api_generate_characters(project_str):
             )
             db_session.add(char)
             db_session.commit()
+            
+            # Automatically save history snapshot for fallback generated characters
+            try:
+                from datetime import datetime
+                ver_name = f"AI 생성본 (기본 템플릿) ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})"
+                new_ver = CharacterVersion(
+                    character_id=char.id,
+                    version_name=ver_name,
+                    name=char.name,
+                    relations=char.relations,
+                    personality=char.personality,
+                    background=char.background,
+                    character_relations=char.character_relations,
+                    speech_style=char.speech_style
+                )
+                db_session.add(new_ver)
+                db_session.commit()
+                print(f"[AbyssWriter] Automatically created history version for fallback character: {ver_name}")
+            except Exception as e:
+                print("[AbyssWriter] Error creating automatic fallback history version:", e)
+                
             if first_char_id is None:
                 first_char_id = char.id
                 
@@ -2984,6 +3236,181 @@ def preview_scenario_regen_prompts(project_str, stage, node_index, title, user_r
     )
     return gr.update(visible=True, value=prompt_info)
 
+def preview_overall_plot_prompt(project_str, user_idea):
+    if not project_str:
+        gr.Warning("선택된 프로젝트가 없습니다.")
+        return gr.update(visible=True, value="선택된 프로젝트가 없습니다.")
+    if not user_idea or not user_idea.strip():
+        gr.Warning("줄거리 아이디어를 입력해 주세요.")
+        return gr.update(visible=True, value="줄거리 아이디어를 입력해 주세요.")
+        
+    pid = parse_project_id(project_str)
+    proj = db_session.query(Project).filter(Project.id == pid).first()
+    if not proj:
+        gr.Warning("프로젝트를 찾을 수 없습니다.")
+        return gr.update(visible=True, value="프로젝트를 찾을 수 없습니다.")
+        
+    system_instruction = (
+        "You are an expert creative writer and story planner.\n"
+        "Your task is to generate a compelling, detailed overall plot (synopsis) for a novel based on the user's idea, title, and genre.\n"
+        "Write the plot in Korean, consisting of 3-4 dense, detailed sentences.\n"
+        "Make it engaging, professional, and descriptive, matching the genre.\n"
+        "If the genre is erotic/romance, make it appropriately sensual and emotionally tense.\n"
+        "Output only the final plot, with no explanations, introduction, or formatting labels."
+    )
+    
+    user_prompt = (
+        f"소설 제목: {proj.title}\n"
+        f"장르: {proj.genre or '드라마'}\n"
+        f"기본 아이디어 / 키워드: {user_idea.strip()}\n\n"
+        f"Please write a detailed, high-quality overall plot (synopsis) in Korean based on the details above."
+    )
+    
+    prompt_info = (
+        f"{'═'*50}\n"
+        f"  📋 전체 소설 줄거리 자동 생성 프롬프트 미리보기\n"
+        f"{'═'*50}\n\n"
+        f"【시스템 프롬프트 (System Instruction)】\n{system_instruction}\n\n"
+        f"{'─'*50}\n\n"
+        f"【사용자 프롬프트 (User Prompt)】\n{user_prompt}\n"
+    )
+    return gr.update(visible=True, value=prompt_info)
+
+def generate_overall_plot(project_str, user_idea, system_prompt_val, positive_prompt_val, negative_prompt_val):
+    if not project_str:
+        gr.Warning("선택된 프로젝트가 없습니다.")
+        return gr.update(), gr.update()
+    if not user_idea or not user_idea.strip():
+        gr.Warning("줄거리 아이디어를 입력해 주세요.")
+        return gr.update(), gr.update()
+        
+    pid = parse_project_id(project_str)
+    proj = db_session.query(Project).filter(Project.id == pid).first()
+    if not proj:
+        gr.Warning("프로젝트를 찾을 수 없습니다.")
+        return gr.update(), gr.update()
+        
+    gr.Info("인공지능이 소설 줄거리를 생성하는 중입니다...")
+    
+    system_instruction = (
+        "You are an expert creative writer and story planner.\n"
+        "Your task is to generate a compelling, detailed overall plot (synopsis) for a novel based on the user's idea, title, and genre.\n"
+        "Write the plot in Korean, consisting of 3-4 dense, detailed sentences.\n"
+        "Make it engaging, professional, and descriptive, matching the genre.\n"
+        "If the genre is erotic/romance, make it appropriately sensual and emotionally tense.\n"
+        "Output only the final plot, with no explanations, introduction, or formatting labels."
+    )
+    
+    user_prompt = (
+        f"소설 제목: {proj.title}\n"
+        f"장르: {proj.genre or '드라마'}\n"
+        f"기본 아이디어 / 키워드: {user_idea.strip()}\n\n"
+        f"Please write a detailed, high-quality overall plot (synopsis) in Korean based on the details above."
+    )
+    
+    try:
+        generated_plot = llama_client.send_chat_completion(
+            system_prompt=system_instruction,
+            user_prompt=user_prompt,
+            temperature=0.8
+        )
+        if not generated_plot or not isinstance(generated_plot, str):
+            generated_plot = "줄거리 생성에 실패했습니다. 다시 시도해 주세요."
+            return gr.update(value=generated_plot), gr.update()
+        else:
+            generated_plot = generated_plot.strip()
+    except Exception as e:
+        print("Error during overall plot generation:", e)
+        generated_plot = f"에러 발생: {e}"
+        return gr.update(value=generated_plot), gr.update()
+        
+    # Save the new version record to PromptVersion
+    idea_snippet = user_idea.strip()
+    if len(idea_snippet) > 15:
+        idea_snippet = idea_snippet[:15] + "..."
+    version_name = f"[AI 생성] {idea_snippet}"
+    
+    try:
+        new_ver = PromptVersion(
+            project_id=pid,
+            version_name=version_name,
+            system_prompt=system_prompt_val,
+            overall_plot=generated_plot,
+            positive_prompt=positive_prompt_val,
+            negative_prompt=negative_prompt_val
+        )
+        db_session.add(new_ver)
+        db_session.commit()
+        gr.Info(f"새로운 이력 버전 '{version_name}'(으)로 자동 저장되었습니다.")
+    except Exception as e:
+        print("Error saving prompt version on AI generation:", e)
+        
+    updated_choices = get_prompt_version_choices(project_str)
+    return (
+        gr.update(value=generated_plot),
+        gr.update(choices=updated_choices, value=updated_choices[0] if updated_choices else None)
+    )
+
+def preview_character_gen_prompt(project_str):
+    if not project_str:
+        gr.Warning("선택된 프로젝트가 없습니다.")
+        return gr.update(visible=True, value="선택된 프로젝트가 없습니다.")
+        
+    pid = parse_project_id(project_str)
+    proj = db_session.query(Project).filter(Project.id == pid).first()
+    if not proj:
+        gr.Warning("프로젝트를 찾을 수 없습니다.")
+        return gr.update(visible=True, value="프로젝트를 찾을 수 없습니다.")
+        
+    system_instruction = (
+        "You are an expert novel planner. "
+        "Your task is to analyze the overall plot and genre of a novel, and design compelling character profiles and relationships. "
+        "CRITICAL: Character names MUST match the cultural/geographical setting of the story. "
+        "For example, if the story is set in Japan, use Japanese names (e.g. 히로시, 유키, 사토). "
+        "If set in Korea, use Korean names. If set in China, use Chinese names. Analyze the plot carefully to determine the setting. "
+        "You must generate exactly: "
+        "1. One Male Hero (남자 주인공): name, personality (가면), background (결핍), character_relations (관계 역학), speech_style (말투). "
+        "2. One Female Hero (여자 주인공): name, personality, background, character_relations, speech_style. "
+        "3. One Male Supporting character (남자 조연): name, personality, background, character_relations, speech_style. "
+        "4. One Female Supporting character (여자 조연): name, personality, background, character_relations, speech_style. "
+        "5. One Other character (기타): name, personality, background, character_relations, speech_style. "
+        "You must output the result strictly in JSON format. Do not write any markdown outside the JSON."
+    )
+    
+    user_prompt = (
+        f"소설 제목: {proj.title}\n"
+        f"장르: {proj.genre or '드라마'}\n"
+        f"전체 소설 줄거리:\n{proj.overall_plot or '줄거리 없음'}\n\n"
+        f"Please design the characters and their relationships according to the story. "
+        f"IMPORTANT: Determine the story's setting (country/culture) from the plot above and use culturally appropriate names. "
+        f"Do NOT default to Korean names if the story is set in another country. "
+        f"The output must be a valid JSON object with the following schema:\n"
+        f"{{\n"
+        f"  \"male_hero\": {{\n"
+        f"    \"name\": \"이름/나이/지위 (줄거리 배경에 맞는 이름 사용)\",\n"
+        f"    \"personality\": \"겉으로 드러나는 가면 (표면적 성격)\",\n"
+        f"    \"background\": \"숨겨진 결핍 및 본능\",\n"
+        f"    \"character_relations\": \"심층 역학 (표면적 역학 vs 무의식적 긴장 등)\",\n"
+        f"    \"speech_style\": \"공적인 공간 vs 사적인 공간 호칭과 말투 변화\"\n"
+        f"  }},\n"
+        f"  \"female_hero\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }},\n"
+        f"  \"male_sub\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }},\n"
+        f"  \"female_sub\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }},\n"
+        f"  \"other\": {{ \"name\": \"...\", \"personality\": \"...\", \"background\": \"...\", \"character_relations\": \"...\", \"speech_style\": \"...\" }}\n"
+        f"}}\n"
+        f"Write all character details strictly in Korean, aligning with the story tone."
+    )
+    
+    prompt_info = (
+        f"{'═'*50}\n"
+        f"  📋 AI 등장인물 자동 생성 프롬프트 미리보기\n"
+        f"{'═'*50}\n\n"
+        f"【시스템 프롬프트 (System Instruction)】\n{system_instruction}\n\n"
+        f"{'─'*50}\n\n"
+        f"【사용자 프롬프트 (User Prompt)】\n{user_prompt}\n"
+    )
+    return gr.update(visible=True, value=prompt_info)
+
 import threading
 
 _session_ctx = threading.local()
@@ -3045,7 +3472,9 @@ funcs_to_wrap = [
     save_scene_history, finalize_scene_history, on_target_scenario_change, save_project_only, refresh_target_scenario_dropdown,
     compile_full_scenario_text, export_scenario_as_txt, copy_scenario_to_clipboard,
     compile_per_scenario_novels, refresh_novel_compilation,
-    preview_ai_prompts, preview_scenario_regen_prompts
+    preview_ai_prompts, preview_scenario_regen_prompts,
+    preview_overall_plot_prompt, generate_overall_plot,
+    preview_character_gen_prompt, on_page_load
 ]
 
 for f in funcs_to_wrap:
@@ -3178,6 +3607,25 @@ def build_ui():
                             lines=4
                         )
                 
+                with gr.Accordion("🪄 AI 전체 줄거리 자동 생성", open=False):
+                    with gr.Row():
+                        with gr.Column(scale=2):
+                            plot_idea_input = gr.Textbox(
+                                label="줄거리 아이디어 / 키워드 입력",
+                                placeholder="예: 30대 중반 미망인과 20대 초반 하숙생의 은밀하고 관능적인 로맨스",
+                                lines=3
+                            )
+                            with gr.Row():
+                                btn_preview_plot_prompt = gr.Button("🔬 AI 실제 사용 프롬프트 확인", variant="secondary")
+                                btn_generate_plot = gr.Button("✨ AI 줄거리 생성", variant="primary")
+                        with gr.Column(scale=3):
+                            plot_prompt_preview = gr.Textbox(
+                                label="AI 줄거리 생성 프롬프트 미리보기",
+                                lines=6,
+                                interactive=False,
+                                visible=False
+                            )
+                
                 btn_save_settings = gr.Button("💾 현재 설정을 프로젝트 기본값으로 저장", variant="secondary")
 
                 gr.Markdown("---")
@@ -3215,44 +3663,61 @@ def build_ui():
             with gr.Tab("👥 캐릭터 설정"):
                 gr.Markdown("### 👥 등장인물 프로필 설정")
                 with gr.Row():
-                    char_dropdown = gr.Dropdown(
-                        label="등장인물 선택",
-                        choices=get_character_dropdown_choices(initial_project),
-                        value=init_char_dropdown_update.get("value") if isinstance(init_char_dropdown_update, dict) else None,
-                        interactive=True,
-                        allow_custom_value=True,
-                        scale=3
-                    )
-                    btn_add_char = gr.Button("➕ 인물 추가", variant="secondary", scale=1)
-                    btn_delete_char = gr.Button("🗑️ 인물 삭제", variant="stop", scale=1)
-                with gr.Row():
-                    btn_generate_characters = gr.Button("🪄 AI 등장인물 프로필 자동 생성", variant="secondary")
-                    btn_save_character_detail = gr.Button("💾 등장인물 정보 저장", variant="primary")
-                with gr.Row():
-                    btn_export_chars_txt = gr.Button("📥 전체 프로필 TXT 다운로드", variant="secondary")
-                    btn_copy_chars_clipboard = gr.Button("📋 전체 프로필 클립보드 복사", variant="secondary")
-                char_download_file = gr.File(label="다운로드 파일", visible=False)
-                char_clipboard_hidden = gr.Textbox(visible=False, elem_id="char_clipboard_hidden")
-                
-                with gr.Group():
-                    char_name = gr.Textbox(label="인물 A (이름/나이/지위)", placeholder="예: 강이현 / 34세 / 대기업 전략기획본부장", value=init_char_name)
-                    char_role = gr.Dropdown(
-                        label="역할 및 분류",
-                        choices=[
-                            ("남자 주인공", "male_hero"),
-                            ("여자 주인공", "female_hero"),
-                            ("남자 조연", "male_sub"),
-                            ("여자 조연", "female_sub"),
-                            ("기타", "other")
-                        ],
-                        value=init_char_role or "other",
-                        interactive=True
-                    )
-                    char_personality = gr.Textbox(label="겉으로 드러나는 가면 (표면적 성격)", placeholder="예: 완벽주의, 냉혈함", value=init_char_personality, lines=2)
-                    char_background = gr.Textbox(label="숨겨진 결핍 및 본능 (심층 심리)", placeholder="예: 인정욕구, 타인에 대한 뿌리 깊은 불신", value=init_char_background, lines=3)
-                    char_relations = gr.Textbox(label="다른 등장인물간의 관계의 심층 역학 설정 가이드", placeholder="표면적 역학 vs 무의식적 긴장, 결핍의 상호작용, 결정적 균열의 시점", value=init_char_relations, lines=4)
-                    char_speech_style = gr.Textbox(label="언어적 발현: 호칭과 말투 구체화 요구사항", placeholder="공적인 공간 (가면을 쓴 상태) vs 사적인 공간 (경계가 허물어지는 순간)에서의 호칭 및 대화 양식", value=init_char_speech_style, lines=4)
-                    char_dummy = gr.State()
+                    with gr.Column(scale=2):
+                        char_tree = gr.HTML(value=get_character_tree_html(initial_project), elem_id="char_tree_view")
+                        char_tree_selected = gr.Textbox(value="", visible=True, elem_id="char_tree_selected_input")
+                        char_tree_sync_btn = gr.Button("Sync", visible=True, elem_id="char_tree_sync_btn")
+                    
+                    with gr.Column(scale=3):
+                        with gr.Row():
+                            char_dropdown = gr.Dropdown(
+                                label="등장인물 선택",
+                                choices=get_character_dropdown_choices(initial_project),
+                                value=init_char_dropdown_update.get("value") if isinstance(init_char_dropdown_update, dict) else None,
+                                interactive=True,
+                                allow_custom_value=True,
+                                elem_id="char_dropdown_hidden"
+                            )
+                            btn_add_char = gr.Button("➕ 인물 추가", variant="secondary", scale=1)
+                            btn_delete_char = gr.Button("🗑️ 인물 삭제", variant="stop", scale=1)
+                        with gr.Row():
+                            btn_generate_characters = gr.Button("🪄 AI 등장인물 프로필 자동 생성", variant="secondary")
+                            btn_save_character_detail = gr.Button("💾 등장인물 정보 저장", variant="primary")
+                        
+                        with gr.Accordion("🔬 AI 등장인물 생성 프롬프트 확인", open=False):
+                            btn_preview_char_prompt = gr.Button("🔬 AI 실제 사용 프롬프트 확인", variant="secondary")
+                            char_prompt_preview = gr.Textbox(
+                                label="AI 등장인물 생성 프롬프트 미리보기",
+                                lines=8,
+                                interactive=False,
+                                visible=False
+                            )
+                            
+                        with gr.Row():
+                            btn_export_chars_txt = gr.Button("📥 전체 프로필 TXT 다운로드", variant="secondary")
+                            btn_copy_chars_clipboard = gr.Button("📋 전체 프로필 클립보드 복사", variant="secondary")
+                        char_download_file = gr.File(label="다운로드 파일", visible=False)
+                        char_clipboard_hidden = gr.Textbox(visible=False, elem_id="char_clipboard_hidden")
+                        
+                        with gr.Group():
+                            char_name = gr.Textbox(label="인물 A (이름/나이/지위)", placeholder="예: 강이현 / 34세 / 대기업 전략기획본부장", value=init_char_name)
+                            char_role = gr.Dropdown(
+                                label="역할 및 분류",
+                                choices=[
+                                    ("남자 주인공", "male_hero"),
+                                    ("여자 주인공", "female_hero"),
+                                    ("남자 조연", "male_sub"),
+                                    ("여자 조연", "female_sub"),
+                                    ("기타", "other")
+                                ],
+                                value=init_char_role or "other",
+                                interactive=True
+                            )
+                            char_personality = gr.Textbox(label="겉으로 드러나는 가면 (표면적 성격)", placeholder="예: 완벽주의, 냉혈함", value=init_char_personality, lines=2)
+                            char_background = gr.Textbox(label="숨겨진 결핍 및 본능 (심층 심리)", placeholder="예: 인정욕구, 타인에 대한 뿌리 깊은 불신", value=init_char_background, lines=3)
+                            char_relations = gr.Textbox(label="다른 등장인물간의 관계의 심층 역학 설정 가이드", placeholder="표면적 역학 vs 무의식적 긴장, 결핍의 상호작용, 결정적 균열의 시점", value=init_char_relations, lines=4)
+                            char_speech_style = gr.Textbox(label="언어적 발현: 호칭과 말투 구체화 요구사항", placeholder="공적인 공간 (가면을 쓴 상태) vs 사적인 공간 (경계가 허물어지는 순간)에서의 호칭 및 대화 양식", value=init_char_speech_style, lines=4)
+                            char_dummy = gr.State()
 
                 gr.Markdown("---")
                 with gr.Group():
@@ -3560,6 +4025,7 @@ def build_ui():
                                 label="추가할 케이스 선택",
                                 choices=[],
                                 interactive=True,
+                                multiselect=True,
                                 allow_custom_value=True
                             )
                             
@@ -3742,6 +4208,29 @@ def build_ui():
         )
 
         project_dropdown.change(
+            fn=load_project_details,
+            inputs=[project_dropdown],
+            outputs=[
+                char_name, char_role, 
+                char_personality, char_background, char_relations, char_speech_style,
+                char_dropdown, char_dummy,
+                system_prompt, overall_plot,
+                positive_prompt, negative_prompt,
+                version_dropdown,
+                scen_stage_dropdown,
+                scen_node_dropdown,
+                scen_ver_dropdown,
+                scen_content_box,
+                scen_title_box,
+                scene_history_dropdown,
+                target_scenario_dropdown,
+                active_characters
+            ]
+        ).then(
+            fn=lambda: gr.update(value="기 (起 - 도입)"),
+            inputs=[],
+            outputs=[case_stage_select]
+        ).then(
             fn=on_case_stage_change,
             inputs=[project_dropdown, case_stage_select],
             outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
@@ -3749,6 +4238,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
 
         btn_save_case_ver.click(
@@ -3870,6 +4363,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
         
         btn_save_project.click(
@@ -3890,6 +4387,25 @@ def build_ui():
                 positive_prompt, negative_prompt
             ],
             outputs=[]
+        )
+        
+        btn_preview_plot_prompt.click(
+            fn=preview_overall_plot_prompt,
+            inputs=[project_dropdown, plot_idea_input],
+            outputs=[plot_prompt_preview],
+            queue=False
+        )
+
+        btn_generate_plot.click(
+            fn=generate_overall_plot,
+            inputs=[
+                project_dropdown, 
+                plot_idea_input, 
+                system_prompt, 
+                positive_prompt, 
+                negative_prompt
+            ],
+            outputs=[overall_plot, version_dropdown]
         )
         
         btn_delete_project.click(
@@ -3924,6 +4440,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
         
         btn_create_project.click(
@@ -3959,6 +4479,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
 
         btn_load_scen_node_gen.click(
@@ -4058,6 +4582,20 @@ def build_ui():
         )
 
         # Dynamic Character Management Handlers
+        char_tree_sync_btn.click(
+            fn=on_char_tree_select_full,
+            inputs=[char_tree_selected],
+            outputs=[char_dropdown]
+        ).then(
+            fn=on_character_select_change,
+            inputs=[char_dropdown],
+            outputs=[char_name, char_role, char_personality, char_background, char_relations, char_speech_style]
+        ).then(
+            fn=get_character_version_choices_update,
+            inputs=[char_dropdown],
+            outputs=[char_version_dropdown]
+        )
+
         char_dropdown.change(
             fn=on_character_select_change,
             inputs=[char_dropdown],
@@ -4080,6 +4618,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
 
         btn_delete_char.click(
@@ -4094,6 +4636,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
 
         btn_save_character_detail.click(
@@ -4108,6 +4654,10 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
         )
 
         btn_generate_characters.click(
@@ -4122,6 +4672,17 @@ def build_ui():
             fn=update_erotic_char_dropdowns,
             inputs=[project_dropdown],
             outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
+        )
+
+        btn_preview_char_prompt.click(
+            fn=preview_character_gen_prompt,
+            inputs=[project_dropdown],
+            outputs=[char_prompt_preview],
+            queue=False
         )
 
         # Character Version history handlers
@@ -4466,6 +5027,255 @@ def build_ui():
             inputs=[char_clipboard_hidden],
             outputs=[],
             js="(text) => { if(text) { navigator.clipboard.writeText(text).then(() => {}).catch(err => console.error('Clipboard write failed:', err)); } }"
+        )
+        
+        # JavaScript for character tree synchronization
+        js_sync = """
+        () => {
+            if (!window.charTreeClickDelegationStarted) {
+                window.charTreeClickDelegationStarted = true;
+                
+                const cleanStr = function(s) {
+                    if (!s) return "";
+                    return s.replace(/👤/g, "").replace(/[\\s ​]+/g, " ").trim();
+                };
+                
+                document.addEventListener("click", function(e) {
+                    const node = e.target.closest(".tree-node");
+                    let id = null;
+                    
+                    if (node) {
+                        const idAttr = node.getAttribute("id");
+                        if (idAttr && idAttr.startsWith("node-")) {
+                            id = idAttr.replace("node-", "");
+                        }
+                    }
+                    
+                    if (!id && e.target && e.target.innerText && e.target.innerText.includes("👤")) {
+                        const targetText = cleanStr(e.target.innerText);
+                        console.log("[AbyssWriter] Clicked tree node text:", targetText);
+                        
+                        const mapEl = document.getElementById("char_id_map");
+                        if (mapEl && mapEl.value) {
+                            try {
+                                const charMap = JSON.parse(mapEl.value);
+                                for (const [name, val] of Object.entries(charMap)) {
+                                    if (cleanStr(name) === targetText) {
+                                        id = val;
+                                        console.log("[AbyssWriter] Matched character name:", name, "-> ID:", id);
+                                        break;
+                                    }
+                                }
+                            } catch (err) {
+                                console.error("[AbyssWriter] Fallback map parse error:", err);
+                            }
+                        }
+                    }
+                    
+                    if (id) {
+                        let input = document.querySelector("#char_tree_selected_input textarea, #char_tree_selected_input input");
+                        if (!input) {
+                            const container = document.getElementById("char_tree_selected_input");
+                            if (container) {
+                                input = container.querySelector("input") || container.querySelector("textarea") || container;
+                            }
+                        }
+                        
+                        console.log("[AbyssWriter] Found input target:", input, "for ID:", id);
+                        if (input) {
+                            let desc = Object.getOwnPropertyDescriptor(input, "value");
+                            if (!desc) {
+                                let proto = Object.getPrototypeOf(input);
+                                while (proto) {
+                                    desc = Object.getOwnPropertyDescriptor(proto, "value");
+                                    if (desc) break;
+                                    proto = Object.getPrototypeOf(proto);
+                                }
+                            }
+                            if (desc && desc.set) {
+                                desc.set.call(input, id);
+                            } else {
+                                input.value = id;
+                            }
+                            input.dispatchEvent(new Event("input", { bubbles: true }));
+                            input.dispatchEvent(new Event("change", { bubbles: true }));
+                            console.log("[AbyssWriter] Successfully wrote character ID to input.");
+                        }
+                        
+                        setTimeout(function() {
+                            const btn = document.getElementById("char_tree_sync_btn");
+                            console.log("[AbyssWriter] Found sync button:", btn);
+                            if (btn) {
+                                const nativeBtn = btn.querySelector("button") || btn;
+                                console.log("[AbyssWriter] Clicking sync button:", nativeBtn);
+                                nativeBtn.click();
+                                nativeBtn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+                            }
+                        }, 50);
+                        
+                        document.querySelectorAll(".tree-node").forEach(n => {
+                            n.classList.remove("active");
+                            n.style.background = "transparent";
+                            n.style.color = "inherit";
+                            n.style.fontWeight = "normal";
+                        });
+                        
+                        document.querySelectorAll("div").forEach(div => {
+                            if (div.innerText && div.innerText.includes("👤")) {
+                                div.style.background = "transparent";
+                                div.style.color = "inherit";
+                                div.style.fontWeight = "normal";
+                            }
+                        });
+                        
+                        const selectedNode = document.getElementById("node-" + id);
+                        if (selectedNode) {
+                            selectedNode.classList.add("active");
+                            selectedNode.style.background = "var(--primary-600, #8b5cf6)";
+                            selectedNode.style.color = "#ffffff";
+                            selectedNode.style.fontWeight = "bold";
+                            selectedNode.style.borderRadius = "6px";
+                            selectedNode.style.padding = "6px 12px";
+                            selectedNode.style.cursor = "pointer";
+                        } else {
+                            e.target.style.background = "var(--primary-600, #8b5cf6)";
+                            e.target.style.color = "#ffffff";
+                            e.target.style.fontWeight = "bold";
+                            e.target.style.borderRadius = "6px";
+                            e.target.style.padding = "6px 12px";
+                            e.target.style.cursor = "pointer";
+                        }
+                    }
+                });
+            }
+            
+            if (!window.charTreeObserverStarted) {
+                window.charTreeObserverStarted = true;
+                setInterval(function() {
+                    let input = document.querySelector("#char_tree_selected_input textarea, #char_tree_selected_input input");
+                    if (!input) {
+                        const container = document.getElementById("char_tree_selected_input");
+                        if (container) {
+                            input = container.querySelector("input") || container.querySelector("textarea");
+                        }
+                    }
+                    if (input && !input.dataset.observed) {
+                        input.dataset.observed = "true";
+                        const syncHighlight = function() {
+                            const targetVal = String(input.value).trim();
+                            if (!targetVal) return;
+                            
+                            document.querySelectorAll(".tree-node").forEach(n => {
+                                n.classList.remove("active");
+                                n.style.background = "transparent";
+                                n.style.color = "inherit";
+                                n.style.fontWeight = "normal";
+                            });
+                            document.querySelectorAll("div").forEach(div => {
+                                if (div.innerText && div.innerText.includes("👤")) {
+                                    div.style.background = "transparent";
+                                    div.style.color = "inherit";
+                                    div.style.fontWeight = "normal";
+                                }
+                            });
+                            
+                            const t = document.getElementById("node-" + targetVal);
+                            if (t) {
+                                t.classList.add("active");
+                                t.style.background = "var(--primary-600, #8b5cf6)";
+                                t.style.color = "#ffffff";
+                                t.style.fontWeight = "bold";
+                                t.style.borderRadius = "6px";
+                                t.style.padding = "6px 12px";
+                                t.style.cursor = "pointer";
+                            } else {
+                                const mapEl = document.getElementById("char_id_map");
+                                if (mapEl && mapEl.value) {
+                                    try {
+                                        const charMap = JSON.parse(mapEl.value);
+                                        let matchedName = null;
+                                        for (const [name, id] of Object.entries(charMap)) {
+                                            if (String(id).trim() === targetVal) {
+                                                matchedName = name;
+                                                break;
+                                            }
+                                        }
+                                        if (matchedName) {
+                                            const cleanStr = function(s) {
+                                                if (!s) return "";
+                                                return s.replace(/👤/g, "").replace(/[\\s ​]+/g, " ").trim();
+                                            };
+                                            const targetCleanName = cleanStr(matchedName);
+                                            document.querySelectorAll("div").forEach(div => {
+                                                if (div.innerText && div.innerText.includes("👤")) {
+                                                    const n = cleanStr(div.innerText);
+                                                    if (targetCleanName && n === targetCleanName) {
+                                                        div.style.background = "var(--primary-600, #8b5cf6)";
+                                                        div.style.color = "#ffffff";
+                                                        div.style.fontWeight = "bold";
+                                                        div.style.borderRadius = "6px";
+                                                        div.style.padding = "6px 12px";
+                                                        div.style.cursor = "pointer";
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    } catch (err) {}
+                                }
+                            }
+                        };
+                        input.addEventListener("input", syncHighlight);
+                        input.addEventListener("change", syncHighlight);
+                        syncHighlight();
+                    }
+                }, 500);
+            }
+        }
+        """
+        app.load(
+            fn=on_page_load,
+            inputs=[],
+            outputs=[project_dropdown]
+        ).then(
+            fn=load_project_details,
+            inputs=[project_dropdown],
+            outputs=[
+                char_name, char_role, 
+                char_personality, char_background, char_relations, char_speech_style,
+                char_dropdown, char_dummy,
+                system_prompt, overall_plot,
+                positive_prompt, negative_prompt,
+                version_dropdown,
+                scen_stage_dropdown,
+                scen_node_dropdown,
+                scen_ver_dropdown,
+                scen_content_box,
+                scen_title_box,
+                scene_history_dropdown,
+                target_scenario_dropdown,
+                active_characters
+            ]
+        ).then(
+            fn=lambda: gr.update(value="기 (起 - 도입)"),
+            inputs=[],
+            outputs=[case_stage_select]
+        ).then(
+            fn=on_case_stage_change,
+            inputs=[project_dropdown, case_stage_select],
+            outputs=[case_node_select, case_ver_select, case_content_input, case_title_input]
+        ).then(
+            fn=update_erotic_char_dropdowns,
+            inputs=[project_dropdown],
+            outputs=[female_char_select, male_char_select]
+        ).then(
+            fn=get_character_tree_html,
+            inputs=[project_dropdown],
+            outputs=[char_tree]
+        ).then(
+            fn=None,
+            inputs=[],
+            outputs=[],
+            js=js_sync
         )
         
     return app

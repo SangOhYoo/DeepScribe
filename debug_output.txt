@@ -1,0 +1,179 @@
+=== on_merge_to_translator ===
+Found! Snippet:
+def on_merge_to_translator(bo_table, selected_ids_str):
+
+    """선택된 글들을 병합하여 번역기 원문으로 바로 로딩합니다. (동기식)"""
+
+    if not bo_table:
+
+        return "❌ 오류: 게시판을 선택해야 합니다.", "", "", gr.update(interactive=False), gr.update(interactive=False)
+
+    if not selected_ids_str or not selected_ids_str.strip():
+
+        return "❌ 오류: 선택된 게시글이 없습니다. 테이블에서 체크박스를 선택해 주세요.", "", "", gr.update(interactive=False), gr.up
+
+
+=== reset_ui ===
+Found! Snippet:
+def reset_ui():
+
+    """Reset the translation UI components to their initial state."""
+
+    global orchestrator
+
+    if orchestrator:
+
+        orchestrator.reset()
+
+    
+
+    return (
+
+        None,                         # file_input
+
+        "",                           # paste_input
+
+        "",                           # file_info
+
+        "",                           # chunk_estimate
+
+   
+
+
+=== on_register_to_gnuboard ===
+Found! Snippet:
+def on_register_to_gnuboard(bo_table, subject, translated_content):
+
+    """번역된 내용을 그누보드 게시판에 등록합니다."""
+
+    if not bo_table:
+
+        return "❌ 오류: 대상 게시판을 선택해주세요."
+
+    if not subject or not subject.strip():
+
+        return "❌ 오류: 제목을 입력해주세요."
+
+    if not translated_content or not translated_content.strip():
+
+        return "❌ 오류: 번역된 내용이 없습니다. 먼저 번역을 실행해주세요."
+
+
+
+    try:
+
+        # HTML 형식으로 변환
+
+
+=== State ===
+Found! Snippet:
+gb_current_page = gr.State(1)
+
+        gb_max_page = gr.State(1)
+
+
+
+        with gr.Tabs() as main_tabs:
+
+            with gr.Tab("🔌 번역 실행 (Translate)"):
+
+
+
+                # ── Header ──
+
+                with gr.Column(elem_id="app-header"):
+
+                    gr.Markdown("# 📖 Novel Translator")
+
+                    gr.Markdown("로컬 LLM 기반 소설 번역기 — 대용량 텍스트 스마트 청킹 & 맥락 유지 번역")
+
+
+
+                
+
+
+=== Wiring 1 ===
+Found! Snippet:
+outputs=[btn_reg_save, reg_subject],
+
+        )
+
+
+
+        # Cancel
+
+        btn_cancel.click(
+
+            fn=cancel_translation,
+
+            inputs=[],
+
+            outputs=[progress_text],
+
+        )
+
+
+
+        # Reset UI for a new translation
+
+        btn_reset.click(
+
+            fn=reset_ui,
+
+            inputs=[],
+
+            outputs=[
+
+                file_input,
+
+                paste_i
+
+
+=== Wiring 2 ===
+Found! Snippet:
+# ── Gnuboard Registration Event Wiring ──
+
+        btn_reg_save.click(
+
+            fn=on_register_to_gnuboard,
+
+            inputs=[reg_board_select, reg_subject, viewer_translated],
+
+            outputs=[reg_status],
+
+        )
+
+
+
+        # ── Dictionary Manager Event Wiring ──
+
+        
+
+        # 1. Refresh pending list dropdown
+
+        btn_refresh_pending.click(
+
+            fn=get_pending_
+
+
+=== Wiring 3 ===
+Found! Snippet:
+gb_btn_merge_to_translator.click(
+
+            fn=on_merge_to_translator,
+
+            inputs=[gb_board_select, gb_selected_ids],
+
+            outputs=[file_info, original_text_state, viewer_original, btn_translate, btn_extract],
+
+        ).then(
+
+            fn=estimate_chunks,
+
+            inputs=[original_text_state, source_lang, context_size],
+
+            outputs=[chunk_estimate],
+
+        )
+
+

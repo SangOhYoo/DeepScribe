@@ -1,0 +1,90 @@
+Function: autofill_characters_from_project
+Start char: 29385, End char: 31496
+Lines count: 55
+First line: def autofill_characters_from_project(project_str):
+Last line:         return "", "", ""
+----------------------------------------
+Function: parse_scenario_cases
+Start char: 31496, End char: 33074
+Lines count: 45
+First line: def parse_scenario_cases(text: str) -> list[dict]:
+Last line:     return cases
+----------------------------------------
+Function: generate_psychological_scenarios_stream
+Start char: 33074, End char: 35604
+Lines count: 81
+First line: def generate_psychological_scenarios_stream(
+Last line:         yield f"⚠️ 오류가 발생했습니다: {str(e)}", [], gr.update(choices=[], value=None)
+----------------------------------------
+Function: load_selected_case_details
+Start char: 35604, End char: 36181
+Lines count: 18
+First line: def load_selected_case_details(selected_case_str, parsed_cases):
+Last line:     return "", "", ""
+----------------------------------------
+Function: insert_case_to_scenario_node
+Start char: 36181, End char: 39112
+Lines count: 68
+First line: def insert_case_to_scenario_node(project_str, stage, insert_position, current_node_index, case_title, case_content):
+Last line:         return gr.update(), gr.update(), gr.update(), "", ""
+----------------------------------------
+Function: on_case_stage_change
+Start char: 51476, End char: 52504
+Lines count: 26
+First line: def on_case_stage_change(project_str, stage):
+Last line:     )
+----------------------------------------
+Function: on_case_node_change
+Start char: 52504, End char: 53236
+Lines count: 20
+First line: def on_case_node_change(project_str, stage, node_index):
+Last line:     )
+----------------------------------------
+Function: on_case_ver_change
+Start char: 53236, End char: 53574
+Lines count: 10
+First line: def on_case_ver_change(ver_id):
+Last line:     return "", ""
+----------------------------------------
+Function: on_case_save_ver
+Start char: 53574, End char: 54087
+Lines count: 14
+First line: def on_case_save_ver(project_str, stage, node_index, ver_id, title, content):
+Last line:     )
+----------------------------------------
+Function: on_case_delete_ver
+Start char: 54087, End char: 54814
+Lines count: 19
+First line: def on_case_delete_ver(project_str, stage, node_index, ver_id):
+Last line:     )
+----------------------------------------
+Function: on_case_commit_ver
+Start char: 54814, End char: 55604
+Lines count: 20
+First line: def on_case_commit_ver(project_str, stage, node_index, title, content, commit_msg, ver_id):
+Last line:     )
+----------------------------------------
+Function: update_erotic_char_dropdowns
+Start char: 55604, End char: 56777
+Lines count: 34
+First line: def update_erotic_char_dropdowns(project_str):
+Last line:     )
+----------------------------------------
+Function: ai_generate_erotic_settings
+Start char: 57669, End char: 60625
+Lines count: 57
+First line: def ai_generate_erotic_settings(female_char_id, male_char_id):
+Last line:         return gr.update(), gr.update(), gr.update(), gr.update()
+----------------------------------------
+Function: preview_ai_prompts
+Start char: 107842, End char: 111646
+Lines count: 80
+First line: def preview_ai_prompts(project_str, system_prompt, overall_plot, positive_prompt, negative_prompt, scene_instruction, selected_chars, target_node_id=None):
+Last line:     return gr.update(visible=True, value=prompt_info), gr.update(visible=True, value=opt_prompt)
+----------------------------------------
+Function: build_ui
+Start char: 117752, End char: 175993
+Lines count: 1336
+First line: def build_ui():
+Last line:         # 최종 소설 취합 탭 핸들러
+----------------------------------------

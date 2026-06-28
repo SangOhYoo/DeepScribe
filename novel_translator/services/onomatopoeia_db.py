@@ -29,6 +29,10 @@ class OnomatopoeiaDB:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # status 컬럼에 인덱스를 추가하여 'pending_extraction', 'pending_review' 상태의 단어를 빠르게 조회합니다.
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pending_words_status ON pending_words (status);
+            """)
             conn.commit()
             conn.close()
             logger.info(f"Initialized SQLite database at {self.db_path}")
