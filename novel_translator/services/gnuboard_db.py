@@ -299,12 +299,77 @@ def get_posts_details(bo_table, wr_ids):
         if conn:
             conn.close()
 
+def get_posts_raw_details(bo_table, wr_ids):
+    """지정된 wr_id들의 정보를 가공하지 않고(HTML 태그 유지) 순서대로 가져옵니다."""
+    if not bo_table or not wr_ids:
+        return []
+    
+    safe_bo_table = re.sub(r'[^a-zA-Z0-9_]', '', bo_table)
+    write_table = f"{TABLE_PREFIX}{safe_bo_table}"
+    
+    try:
+        ids = [int(x) for x in wr_ids]
+    except Exception as e:
+        logger.error(f"Invalid wr_ids: {wr_ids}, error: {e}")
+        return []
+        
+    if not ids:
+        return []
+        
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(ids))
+            sql = f"""
+                SELECT wr_id, wr_subject, wr_content, wr_name, ca_name, wr_datetime, wr_link1, wr_option, wr_1 
+                FROM {write_table} 
+                WHERE wr_id IN ({placeholders})
+            """
+            cur.execute(sql, tuple(ids))
+            rows = cur.fetchall()
+            
+            posts_map = {r["wr_id"]: r for r in rows}
+            
+            result = []
+            for wr_id in ids:
+                post = posts_map.get(wr_id)
+                if post:
+                    result.append({
+                        "wr_id": wr_id,
+                        "wr_subject": post["wr_subject"] or "",
+                        "wr_content": post["wr_content"] or "",
+                        "wr_name": post["wr_name"] or "",
+                        "ca_name": post["ca_name"] or "",
+                        "wr_datetime": str(post["wr_datetime"]) if post["wr_datetime"] else "",
+                        "wr_link1": post["wr_link1"] or "",
+                        "wr_option": post["wr_option"] or "",
+                        "wr_1": post["wr_1"] or ""
+                    })
+            return result
+    except Exception as e:
+        logger.error(f"Error fetching raw posts details in {write_table}: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+def _strip_4byte_chars(text):
+    if not isinstance(text, str):
+        return text
+    # MySQL utf8 인코딩에서 지원하지 않는 4바이트 문자(이모지 등) 제거
+    return re.sub(r'[^\u0000-\uFFFF]', '', text)
+
 def register_post_to_gnuboard(
     bo_table, subject, content, ca_name, mb_id="admin", wr_name="최고관리자",
     wr_datetime=None, wr_1="", wr_link1="", wr_option=""
 ):
     """Registers or updates a post in the target Gnuboard table, matching PHP logic."""
     import datetime
+    
+    subject = _strip_4byte_chars(subject)
+    content = _strip_4byte_chars(content)
+    wr_name = _strip_4byte_chars(wr_name)
     
     safe_bo_table = re.sub(r'[^a-zA-Z0-9_]', '', bo_table)
     write_table = f"{TABLE_PREFIX}{safe_bo_table}"
@@ -505,6 +570,9 @@ class GnuboardDB:
         
     def get_posts_details(self, bo_table, wr_ids):
         return get_posts_details(bo_table, wr_ids)
+        
+    def get_posts_raw_details(self, bo_table, wr_ids):
+        return get_posts_raw_details(bo_table, wr_ids)
         
     def register_post_to_gnuboard(
         self, bo_table, title, content, original_url="", original_datetime=None, ip="127.0.0.1"

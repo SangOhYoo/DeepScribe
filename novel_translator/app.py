@@ -1308,6 +1308,223 @@ def start_translation(
 
 
 
+def on_register_each_to_trs(
+    bo_table, selected_ids_str,
+    source_lang, target_lang, context_size,
+    api_url, api_key, glossary_file, temperature,
+    enable_thinking
+):
+    """선택된 글들을 각각 순차적으로 번역한 후 'trs' 게시판에 개별적으로 등록합니다."""
+    if not bo_table:
+        yield "❌ 오류: 게시판을 선택해야 합니다.", 0, "❌ 오류: 게시판을 선택해야 합니다.", "", ""
+        return
+    if not selected_ids_str or not selected_ids_str.strip():
+        yield "❌ 오류: 선택된 게시글이 없습니다. 테이블에서 체크박스를 선택해 주세요.", 0, "❌ 오류: 선택된 게시글이 없습니다. 테이블에서 체크박스를 선택해 주세요.", "", ""
+        return
+
+    wr_ids = [x.strip() for x in selected_ids_str.split(",") if x.strip()]
+
+    raw_posts = get_posts_details(bo_table, wr_ids)
+    if not raw_posts:
+        yield "❌ 오류: 선택된 게시글의 데이터를 가져오지 못했습니다.", 0, "❌ 오류: 선택된 게시글의 데이터를 가져오지 못했습니다.", "", ""
+        return
+
+    success_count = 0
+    fail_count = 0
+    skipped_count = 0
+    results_wr_ids = []
+
+    tmp_dir = os.path.join(os.path.dirname(__file__), "outputs")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    total_posts = len(raw_posts)
+
+    for idx, post in enumerate(raw_posts, 1):
+        orig_subject = post.get("wr_subject", "")
+        orig_content = post.get("wr_content", "")
+        source_wr_id = post.get("wr_id")
+
+        base_ratio = (idx - 1) / total_posts
+
+        # 1. 준비
+        prep_msg = f"⏳ [{idx}/{total_posts}] '{orig_subject}' (원문 ID: {source_wr_id}) 번역 준비 중..."
+        yield prep_msg, int(base_ratio * 100), prep_msg, orig_content, ""
+
+        # 2. 제목 번역
+        title_msg = f"⏳ [{idx}/{total_posts}] '{orig_subject}' 제목 번역 중..."
+        yield title_msg, int((base_ratio + 0.05 / total_posts) * 100), title_msg, orig_content, ""
+        translated_subject = orig_subject
+        try:
+            client = TranslationClient(
+                api_url=api_url if api_url else None,
+                api_key=api_key if api_key else None,
+            )
+            system_prompt = (
+                "당신은 소설 번역가입니다. 소설의 소제목이나 장 제목을 장식이나 해설 없이 순수한 한국어 번역 결과만 한 줄로 출력하십시오."
+            )
+            user_prompt = f"원문 제목: {orig_subject}\n번역된 제목:"
+            translated_title_res = client.translate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=0.3,
+            )
+            if translated_title_res:
+                translated_subject = str(translated_title_res).strip().strip('"').strip("'")
+        except Exception as e:
+            logger.error(f"Error translating title for post {source_wr_id}: {e}")
+
+        # 3. 본문 번역
+        body_msg = f"⏳ [{idx}/{total_posts}] '{orig_subject}' 본문 번역 중..."
+        yield body_msg, int((base_ratio + 0.1 / total_posts) * 100), body_msg, orig_content, ""
+        translated_content = ""
+        temp_file_path = os.path.join(tmp_dir, f"temp_register_{source_wr_id}.txt")
+
+        try:
+            with open(temp_file_path, "w", encoding="utf-8") as f:
+                f.write(orig_content)
+
+            orchestrator.reset()
+
+            glossary_path = ""
+            if glossary_file is not None:
+                glossary_path = str(glossary_file)
+            else:
+                default_glossary_csv = "D:/DeepScribe/word_Jp2Kr.csv"
+                if os.path.exists(default_glossary_csv):
+                    glossary_path = default_glossary_csv
+
+            try:
+                ctx_size = int(context_size)
+            except Exception:
+                ctx_size = 16384
+
+            result_holder = {"text": ""}
+            def run_translation():
+                result_holder["text"] = orchestrator.translate_file(
+                    file_path=temp_file_path,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    context_size=ctx_size,
+                    api_url=api_url if api_url else "",
+                    api_key=api_key if api_key else "",
+                    glossary_path=glossary_path,
+                    temperature=float(temperature),
+                    enable_thinking=enable_thinking,
+                )
+
+            thread = threading.Thread(target=run_translation, daemon=True)
+            thread.start()
+
+            while thread.is_alive():
+                prog = orchestrator.get_progress()
+                status_icon = {
+                    TranslationStatus.READING: "📖",
+                    TranslationStatus.CHUNKING: "✂️",
+                    TranslationStatus.TRANSLATING: "🔄",
+                    TranslationStatus.POSTPROCESSING: "✨",
+                }.get(prog.status, "⏳")
+
+                ratio = int(prog.progress_ratio * 100)
+                overall_ratio = int((base_ratio + (prog.progress_ratio * 0.8) / total_posts) * 100)
+                status_msg = f"⏳ [{idx}/{total_posts}] '{orig_subject}' 본문 번역 중... ({status_icon} 청크 {prog.current_chunk}/{prog.total_chunks} - {ratio}%)"
+                yield status_msg, overall_ratio, status_msg, prog.original_text or orig_content, prog.translated_text or ""
+                time.sleep(0.5)
+
+            thread.join()
+
+            prog = orchestrator.get_progress()
+            if prog.status == TranslationStatus.ERROR:
+                raise Exception(prog.error)
+            elif prog.status == TranslationStatus.CANCELLED:
+                raise Exception("번역 취소됨")
+
+            translated_content = result_holder["text"]
+
+        except Exception as e:
+            logger.error(f"Failed to translate content for post {source_wr_id}: {e}")
+            fail_count += 1
+            fail_msg = f"❌ [{idx}/{total_posts}] '{orig_subject}' 번역 실패: {str(e)}"
+            yield fail_msg, int((idx / total_posts) * 100), fail_msg, orig_content, ""
+            if os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                except Exception:
+                    pass
+            continue
+
+        if os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                pass
+
+        # 4. 'trs' 게시판 등록
+        reg_msg = f"⏳ [{idx}/{total_posts}] '{orig_subject}' 번역 완료! 'trs' 게시판 등록 중..."
+        yield reg_msg, int((base_ratio + 0.95 / total_posts) * 100), reg_msg, orig_content, translated_content
+
+        try:
+            wr_name = post.get("wr_name") or "최고관리자"
+            wr_datetime = post.get("wr_datetime")
+            ca_name = post.get("ca_name") or "번역"
+            wr_option = post.get("wr_option") or "html1"
+            wr_link1 = f"http://localhost/bbs/board.php?bo_table={bo_table}&wr_id={source_wr_id}"
+
+            target_board = "trs"
+
+            final_subject = translated_subject
+            if orig_subject:
+                if wr_name:
+                    final_subject = f"{translated_subject} - ({orig_subject} - {wr_name})"
+                else:
+                    final_subject = f"{translated_subject} - ({orig_subject})"
+
+            res = register_post_to_gnuboard(
+                bo_table=target_board,
+                subject=final_subject,
+                content=translated_content,
+                ca_name=ca_name,
+                mb_id="admin",
+                wr_name=wr_name,
+                wr_datetime=wr_datetime,
+                wr_option=wr_option,
+                wr_1="",
+                wr_link1=wr_link1,
+            )
+
+            if res and str(res).startswith("skipped:"):
+                skipped_count += 1
+                skip_msg = f"⚠️ [{idx}/{total_posts}] '{orig_subject}' 중복 등록 스킵됨."
+                yield skip_msg, int((idx / total_posts) * 100), skip_msg, orig_content, translated_content
+            else:
+                success_count += 1
+                res_msg = str(res).split(":")
+                wr_id = res_msg[1] if len(res_msg) > 1 else res
+                results_wr_ids.append(wr_id)
+                success_msg = f"✅ [{idx}/{total_posts}] '{orig_subject}' 'trs' 게시판 등록 성공! (새 ID: {wr_id})"
+                yield success_msg, int((idx / total_posts) * 100), success_msg, orig_content, translated_content
+
+        except Exception as e:
+            logger.error(f"Error registering translated post {source_wr_id} to trs: {e}")
+            fail_count += 1
+            fail_reg_msg = f"❌ [{idx}/{total_posts}] '{orig_subject}' 등록 실패: {str(e)}"
+            yield fail_reg_msg, int((idx / total_posts) * 100), fail_reg_msg, orig_content, translated_content
+
+    summary_msg = f"📋 **'trs' 게시판 각각 등록 결과** · "
+    parts = []
+    if success_count > 0:
+        parts.append(f"성공: {success_count}개 (ID: {', '.join(results_wr_ids)})")
+    if skipped_count > 0:
+        parts.append(f"스킵(중복): {skipped_count}개")
+    if fail_count > 0:
+        parts.append(f"실패: {fail_count}개")
+
+    summary_msg += "  |  ".join(parts)
+    yield summary_msg, 100, summary_msg, "", ""
+
+
+
+
+
 def cancel_translation():
 
     """Cancel the running translation."""
@@ -2420,6 +2637,8 @@ def create_ui() -> gr.Blocks:
                                         with gr.Row():
 
                                             gb_btn_merge_to_translator = gr.Button("📥 번역기에 입력", variant="primary", size="sm")
+
+                                            gb_btn_register_each = gr.Button("📝 각각 등록", variant="secondary", size="sm")
 
                                             gb_btn_merge_download = gr.Button("📥 선택 항목 병합 다운로드", variant="secondary", size="sm")
 
@@ -3703,6 +3922,25 @@ def create_ui() -> gr.Blocks:
 
             outputs=[download_file],
 
+        )
+
+
+
+        gb_btn_register_each.click(
+            fn=on_register_each_to_trs,
+            inputs=[
+                gb_board_select,
+                gb_selected_ids,
+                source_lang,
+                target_lang,
+                context_size,
+                api_url,
+                api_key,
+                glossary_file,
+                temperature,
+                enable_thinking,
+            ],
+            outputs=[progress_text, progress_bar, file_info, viewer_original, viewer_translated],
         )
 
 

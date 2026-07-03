@@ -267,8 +267,9 @@ class TranslationOrchestrator:
         self._prev_context_size: int = 0
         self._prev_original_text: str = ""
         
-        self.onomatopoeia_csv = "D:\\DeepScribe\\japanese_erotic_onomatopoeia.csv"
-        self.onomatopoeia_db_path = "D:\\DeepScribe\\novel_translator\\onomatopoeia.db"
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        self.onomatopoeia_csv = os.path.join(base_dir, "japanese_erotic_onomatopoeia.csv")
+        self.onomatopoeia_db_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "onomatopoeia.db")
         self.onomatopoeia_extractor = OnomatopoeiaExtractor(self.onomatopoeia_csv)
         self.onomatopoeia_db = OnomatopoeiaDB(self.onomatopoeia_db_path)
         self.onomatopoeia_worker = OnomatopoeiaWorker(self.onomatopoeia_db_path)
@@ -493,7 +494,8 @@ class TranslationOrchestrator:
 
             # Register entries
             registered_count = 0
-            default_glossary = "D:\\DeepScribe\\word_Jp2Kr.csv"
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            default_glossary = os.path.join(base_dir, "word_Jp2Kr.csv")
 
             # Load existing terms in the CSVs first to avoid duplicates
             existing_terms = set()
@@ -681,7 +683,8 @@ class TranslationOrchestrator:
             self.glossary.clear()
             
             # 1. Load default glossary first
-            default_glossary = "D:\\DeepScribe\\word_Jp2Kr.csv"
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            default_glossary = os.path.join(base_dir, "word_Jp2Kr.csv")
             default_count = 0
             if os.path.exists(default_glossary):
                 default_count = self.glossary.load_from_file(default_glossary)
@@ -812,6 +815,9 @@ class TranslationOrchestrator:
                 current_content_tokens = []
                 current_reasoning_tokens = []
                 
+                # GPU token generation is too fast; throttle UI updates to 0.15s intervals
+                last_update_time = [time.time()]
+                
                 def on_token(token: str, is_reasoning: bool = False):
                     if self._is_cancelled():
                         return
@@ -819,28 +825,36 @@ class TranslationOrchestrator:
                     if is_reasoning:
                         if not enable_thinking:
                             return
-                        # Thinking process — update reasoning panel only
+                        # Thinking process
                         current_reasoning_tokens.append(token)
-                        reasoning_so_far = "".join(current_reasoning_tokens)
-                        self._update_progress(
-                            TranslationStatus.TRANSLATING,
-                            f"청크 {i + 1}/{len(chunks)} 사고 중... 🧠",
-                            current_chunk=i + 1,
-                            reasoning_so_far=reasoning_so_far,
-                        )
+                        
+                        now = time.time()
+                        if now - last_update_time[0] >= 0.15:
+                            reasoning_so_far = "".join(current_reasoning_tokens)
+                            self._update_progress(
+                                TranslationStatus.TRANSLATING,
+                                f"청크 {i + 1}/{len(chunks)} 사고 중... 🧠",
+                                current_chunk=i + 1,
+                                reasoning_so_far=reasoning_so_far,
+                            )
+                            last_update_time[0] = now
                     else:
-                        # Actual translation content — update translation viewer
+                        # Actual translation content
                         current_content_tokens.append(token)
-                        current_translated = "".join(current_content_tokens)
-                        all_chunks = self._translated_chunks + [current_translated]
-                        merged_so_far = self.postprocessor.merge_chunks(all_chunks)
-                        self._update_progress(
-                            TranslationStatus.TRANSLATING,
-                            f"청크 {i + 1}/{len(chunks)} 번역 중... "
-                            f"(≈{chunk.estimated_tokens} tokens)",
-                            current_chunk=i + 1,
-                            translated_so_far=merged_so_far,
-                        )
+                        
+                        now = time.time()
+                        if now - last_update_time[0] >= 0.15:
+                            current_translated = "".join(current_content_tokens)
+                            all_chunks = self._translated_chunks + [current_translated]
+                            merged_so_far = self.postprocessor.merge_chunks(all_chunks)
+                            self._update_progress(
+                                TranslationStatus.TRANSLATING,
+                                f"청크 {i + 1}/{len(chunks)} 번역 중... "
+                                f"(≈{chunk.estimated_tokens} tokens)",
+                                current_chunk=i + 1,
+                                translated_so_far=merged_so_far,
+                            )
+                            last_update_time[0] = now
 
                 # Wrap the callback using ThinkingStreamParser to filter out any inline reasoning tags (e.g. for Gemma 4)
                 parser = ThinkingStreamParser(on_token, enable_thinking=enable_thinking)
@@ -861,6 +875,15 @@ class TranslationOrchestrator:
                 )
                 parser.flush()
 
+                # Force final update for the chunk to ensure no tokens are missed
+                if current_reasoning_tokens:
+                    reasoning_so_far = "".join(current_reasoning_tokens)
+                    self._update_progress(TranslationStatus.TRANSLATING, reasoning_so_far=reasoning_so_far)
+                if current_content_tokens:
+                    current_translated = "".join(current_content_tokens)
+                    all_chunks = self._translated_chunks + [current_translated]
+                    merged_so_far = self.postprocessor.merge_chunks(all_chunks)
+                    self._update_progress(TranslationStatus.TRANSLATING, translated_so_far=merged_so_far)
                 if translated is None:
                     logger.error(f"Chunk {i + 1} translation failed!")
                     translated = f"[번역 실패: 청크 {i + 1}]\n{chunk.text}"

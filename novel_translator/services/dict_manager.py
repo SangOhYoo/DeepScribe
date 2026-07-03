@@ -2,10 +2,11 @@ import csv
 import os
 import gradio as gr
 import sqlite3
+import threading
 from novel_translator.services.onomatopoeia_db import OnomatopoeiaDB
 
-
-_csv_cache = {"mtime": 0, "rows": [], "header": [], "lookup": {}}
+_csv_lock = threading.Lock()
+_csv_cache = {"mtime": 0, "size": 0, "rows": [], "header": [], "lookup": {}}
 
 def _read_csv_cached(file_path):
     global _csv_cache
@@ -13,7 +14,8 @@ def _read_csv_cached(file_path):
         return [], [], {}
         
     mtime = os.path.getmtime(file_path)
-    if mtime == _csv_cache["mtime"] and _csv_cache["rows"]:
+    size = os.path.getsize(file_path)
+    if mtime == _csv_cache["mtime"] and size == _csv_cache["size"] and _csv_cache["rows"]:
         return _csv_cache["header"], _csv_cache["rows"], _csv_cache["lookup"]
         
     rows = []
@@ -42,6 +44,7 @@ def _read_csv_cached(file_path):
                 lookup[source_word] = row
             
     _csv_cache["mtime"] = mtime
+    _csv_cache["size"] = size
     _csv_cache["rows"] = rows
     _csv_cache["header"] = header
     _csv_cache["lookup"] = lookup
@@ -49,7 +52,7 @@ def _read_csv_cached(file_path):
 
 def invalidate_csv_cache():
     global _csv_cache
-    _csv_cache = {"mtime": 0, "rows": [], "header": [], "lookup": {}}
+    _csv_cache = {"mtime": 0, "size": 0, "rows": [], "header": [], "lookup": {}}
 
 def load_current_dictionary(file_path, search_term="", page=1, page_size=100):
     import pandas as pd
@@ -168,7 +171,7 @@ def approve_pending_word(word, translation, notes, ex_src, ex_wrong, ex_correct,
     from novel_translator.services.onomatopoeia_db import OnomatopoeiaDB
     
     if not word or not translation:
-        return "❌ 오류: 단어와 추천 번역은 필수 입력 항목입니다.", gr.update(), [], gr.update()
+        return "❌ 오류: 단어와 추천 번역은 필수 입력 항목입니다.", gr.update(), gr.update(choices=[], value=None), gr.update()
         
     word_clean = word.strip()
     already_exists = False
@@ -181,10 +184,11 @@ def approve_pending_word(word, translation, notes, ex_src, ex_wrong, ex_correct,
             
     try:
         if not already_exists:
-            with open(file_path, "a", encoding="utf-8-sig", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([word_clean, translation.strip(), notes.strip(), "의성어", ex_src.strip(), ex_wrong.strip(), ex_correct.strip()])
-            invalidate_csv_cache()
+            with _csv_lock:
+                with open(file_path, "a", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([word_clean, translation.strip(), notes.strip(), "의성어", ex_src.strip(), ex_wrong.strip(), ex_correct.strip()])
+                invalidate_csv_cache()
         db_path = os.path.join(os.path.dirname(file_path), "novel_translator", "onomatopoeia.db")
         db_path = os.path.abspath(db_path)
         db = OnomatopoeiaDB(db_path)
@@ -200,7 +204,7 @@ def approve_pending_word(word, translation, notes, ex_src, ex_wrong, ex_correct,
         return status_msg, registered_choices_update, pending_choices, gr.update()
         
     except Exception as e:
-        return f"❌ 오류 발생: {str(e)}", gr.update(), [], gr.update()
+        return f"❌ 오류 발생: {str(e)}", gr.update(), gr.update(choices=[], value=None), gr.update()
 
 def approve_all_pending_words(file_path):
     import gradio as gr
@@ -211,27 +215,28 @@ def approve_all_pending_words(file_path):
     db = OnomatopoeiaDB(db_path)
     pending = db.get_pending_review()
     if not pending:
-        return "ℹ️ 승인 대기 중인 단어가 없습니다.", gr.update(), [], gr.update()
+        return "ℹ️ 승인 대기 중인 단어가 없습니다.", gr.update(), gr.update(choices=[], value=None), gr.update()
         
     try:
         _, cached_rows, _ = _read_csv_cached(file_path)
         existing_words = {r[0].strip() for r in cached_rows if r}
         
         added_count = 0
-        with open(file_path, "a", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            for item in pending:
-                w = item["word"].strip()
-                t = (item["suggested_translation"] or "").strip()
-                n = (item["notes"] or "").strip()
-                if w not in existing_words:
-                    writer.writerow([w, t, n, "의성어", "", "", ""])
-                    existing_words.add(w)
-                    added_count += 1
-                # 승인된 단어는 DB에서 삭제합니다.
-                db.delete_word(w)
-                
-        invalidate_csv_cache()
+        with _csv_lock:
+            with open(file_path, "a", encoding="utf-8-sig", newline="") as f:
+                writer = csv.writer(f)
+                for item in pending:
+                    w = item["word"].strip()
+                    t = (item["suggested_translation"] or "").strip()
+                    n = (item["notes"] or "").strip()
+                    if w not in existing_words:
+                        writer.writerow([w, t, n, "의성어", "", "", ""])
+                        existing_words.add(w)
+                        added_count += 1
+                    # 승인된 단어는 DB에서 삭제합니다.
+                    db.delete_word(w)
+                    
+            invalidate_csv_cache()
 
         pending_choices = get_pending_choices(db_path)
         registered_choices_update = get_registered_choices(file_path)
@@ -240,7 +245,7 @@ def approve_all_pending_words(file_path):
         return f"✅ {len(pending)}개 대기 단어 승인 완료 (신규 사전 등록: {added_count}개)", registered_choices_update, pending_choices, gr.update()
         
     except Exception as e:
-        return f"❌ 오류 발생: {str(e)}", gr.update(), [], gr.update()
+        return f"❌ 오류 발생: {str(e)}", gr.update(), gr.update(choices=[], value=None), gr.update()
 
 def update_registered_word(word, translation, notes, ex_src, ex_wrong, ex_correct, file_path):
     import gradio as gr
@@ -261,15 +266,16 @@ def update_registered_word(word, translation, notes, ex_src, ex_wrong, ex_correc
         if not updated:
             return f"❌ 오류: 사전에서 '{word}'을(가) 찾을 수 없습니다.", gr.update(), gr.update()
             
-        with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            if header:
-                writer.writerow(header)
-            else:
-                writer.writerow(["source", "target", "category", "notes", "example_source", "example_wrong", "example_correct"])
-            writer.writerows(rows)
-            
-        invalidate_csv_cache()
+        with _csv_lock:
+            with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.writer(f)
+                if header:
+                    writer.writerow(header)
+                else:
+                    writer.writerow(["source", "target", "category", "notes", "example_source", "example_wrong", "example_correct"])
+                writer.writerows(rows)
+                
+            invalidate_csv_cache()
 
         registered_choices_update = get_registered_choices(file_path)
         # dict_view_update는 이제 페이지네이션되므로, UI 업데이트가 필요합니다. 여기서는 비워둡니다.
@@ -294,15 +300,16 @@ def delete_registered_word(word, file_path):
         if len(rows) == original_len:
             return f"❌ 오류: 사전에서 '{word}'을(가) 찾을 수 없습니다.", gr.update(), gr.update()
             
-        with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.writer(f)
-            if header:
-                writer.writerow(header)
-            else:
-                writer.writerow(["source", "target", "category", "notes", "example_source", "example_wrong", "example_correct"])
-            writer.writerows(rows)
-            
-        invalidate_csv_cache()
+        with _csv_lock:
+            with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.writer(f)
+                if header:
+                    writer.writerow(header)
+                else:
+                    writer.writerow(["source", "target", "category", "notes", "example_source", "example_wrong", "example_correct"])
+                writer.writerows(rows)
+                
+            invalidate_csv_cache()
 
         registered_choices_update = get_registered_choices(file_path)
         # dict_view_update는 이제 페이지네이션되므로, UI 업데이트가 필요합니다. 여기서는 비워둡니다.

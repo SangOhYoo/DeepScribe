@@ -18,17 +18,26 @@ DEFAULT_API_URL = "http://127.0.0.1:8081/v1/chat/completions"
 DEFAULT_API_KEY = "man-to-man-key-4501"
 
 
+_settings_cache = None
+
 def _load_settings() -> dict:
     """Load settings from the project root settings.json."""
+    global _settings_cache
+    if _settings_cache is not None:
+        return _settings_cache
+        
     try:
         base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         path = os.path.join(base, "settings.json")
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                _settings_cache = json.load(f)
+                return _settings_cache
     except Exception:
         pass
-    return {}
+    
+    _settings_cache = {}
+    return _settings_cache
 
 
 class TranslationClient:
@@ -54,6 +63,7 @@ class TranslationClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
+        self.session = requests.Session()
         logger.info(f"TranslationClient initialized: {self.api_url}")
 
     def _call_api_standard(
@@ -79,7 +89,7 @@ class TranslationClient:
         while attempt <= max_attempts:
             try:
                 logger.info(f"[Standard] API attempt {attempt}/{max_attempts}...")
-                resp = requests.post(
+                resp = self.session.post(
                     self.api_url,
                     json=payload,
                     headers=headers,
@@ -162,73 +172,96 @@ class TranslationClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
-        try:
-            logger.info("[Stream] Attempting streaming request...")
-            resp = requests.post(
-                self.api_url,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout,
-                stream=True,
-            )
-            resp.raise_for_status()
-
-            content_tokens = []
-            reasoning_tokens = []
-            raw_lines_debug = []
-
-            for line in resp.iter_lines():
-                if not line:
+        
+        attempt = 1
+        max_attempts = 3
+        delay = 2.0
+        
+        while attempt <= max_attempts:
+            try:
+                logger.info(f"[Stream] Attempting streaming request ({attempt}/{max_attempts})...")
+                resp = self.session.post(
+                    self.api_url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                    stream=True,
+                )
+                
+                if resp.status_code == 503:
+                    if max_attempts < 10:
+                        max_attempts = 10
+                    logger.warning(f"[Stream] 503 Service Unavailable. Retrying in 6s...")
+                    time.sleep(6.0)
+                    attempt += 1
                     continue
-                line_str = line.decode("utf-8", errors="replace").strip()
-                if len(raw_lines_debug) < 5:
-                    raw_lines_debug.append(line_str)
+                    
+                resp.raise_for_status()
+    
+                content_tokens = []
+                reasoning_tokens = []
+                raw_lines_debug = []
 
-                # SSE format: "data: {...}" or "data:{...}"
-                if line_str.startswith("data:"):
-                    data_content = line_str[5:].strip()
-                    if data_content == "[DONE]":
-                        break
-                    try:
-                        chunk_data = json.loads(data_content)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-
-                        # Actual content (priority)
-                        text_token = delta.get("content") or ""
-                        if text_token:
-                            content_tokens.append(text_token)
-                            on_token_callback(text_token, False)
-
-                        # Thinking model reasoning_content
-                        reasoning_token = delta.get("reasoning_content") or ""
-                        if reasoning_token:
-                            reasoning_tokens.append(reasoning_token)
-                            on_token_callback(reasoning_token, True)
-
-                    except json.JSONDecodeError:
+                for line in resp.iter_lines():
+                    if not line:
                         continue
+                    line_str = line.decode("utf-8", errors="replace").strip()
+                    if len(raw_lines_debug) < 5:
+                        raw_lines_debug.append(line_str)
+    
+                    # SSE format: "data: {...}" or "data:{...}"
+                    if line_str.startswith("data:"):
+                        data_content = line_str[5:].strip()
+                        if data_content == "[DONE]":
+                            break
+                        try:
+                            chunk_data = json.loads(data_content)
+                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+    
+                            # Actual content (priority)
+                            text_token = delta.get("content") or ""
+                            if text_token:
+                                content_tokens.append(text_token)
+                                on_token_callback(text_token, False)
+    
+                            # Thinking model reasoning_content
+                            reasoning_token = delta.get("reasoning_content") or ""
+                            if reasoning_token:
+                                reasoning_tokens.append(reasoning_token)
+                                on_token_callback(reasoning_token, True)
+    
+                        except json.JSONDecodeError:
+                            continue
+    
+                # Prefer content; fallback to reasoning_content
+                content = "".join(content_tokens)
+                if content:
+                    logger.info(f"[Stream] Success via content — {len(content)} chars")
+                    return content
+    
+                reasoning = "".join(reasoning_tokens)
+                if reasoning:
+                    logger.info(f"[Stream] Success via reasoning_content fallback — {len(reasoning)} chars")
+                    return reasoning
+    
+                # Stream returned nothing — log first few raw lines for debugging
+                logger.warning(
+                    f"[Stream] Empty result after parsing {len(raw_lines_debug)} lines. "
+                    f"First 3 raw lines: {raw_lines_debug[:3]}"
+                )
+                return None
 
-            # Prefer content; fallback to reasoning_content
-            content = "".join(content_tokens)
-            if content:
-                logger.info(f"[Stream] Success via content — {len(content)} chars")
-                return content
+            except requests.exceptions.Timeout:
+                logger.error(f"[Stream] Timeout on attempt {attempt}")
+            except Exception as e:
+                logger.warning(f"[Stream] Failed: {e}")
+                
+            if attempt < max_attempts:
+                time.sleep(delay)
+                delay *= self.backoff_factor
+            attempt += 1
 
-            reasoning = "".join(reasoning_tokens)
-            if reasoning:
-                logger.info(f"[Stream] Success via reasoning_content fallback — {len(reasoning)} chars")
-                return reasoning
-
-            # Stream returned nothing — log first few raw lines for debugging
-            logger.warning(
-                f"[Stream] Empty result after parsing {len(raw_lines_debug)} lines. "
-                f"First 3 raw lines: {raw_lines_debug[:3]}"
-            )
-            return None
-
-        except Exception as e:
-            logger.warning(f"[Stream] Failed: {e}")
-            return None
+        return None
 
     def _call_api(
         self, messages: list[dict[str, Any]], temperature: float,
