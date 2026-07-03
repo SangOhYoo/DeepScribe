@@ -1478,10 +1478,12 @@ def on_register_each_to_trs(
                 else:
                     final_subject = f"{translated_subject} - ({orig_subject})"
 
+            final_content = translated_content.replace("\n", "<br>\n") if translated_content else ""
+
             res = register_post_to_gnuboard(
                 bo_table=target_board,
                 subject=final_subject,
-                content=translated_content,
+                content=final_content,
                 ca_name=ca_name,
                 mb_id="admin",
                 wr_name=wr_name,
