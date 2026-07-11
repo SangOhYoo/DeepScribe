@@ -10,6 +10,8 @@ import threading
 
 import time
 
+import json
+
 from typing import Optional
 
 import csv
@@ -4019,30 +4021,64 @@ def create_ui() -> gr.Blocks:
 
 if __name__ == "__main__":
 
+    # ── Read user config ──
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    default_theme = "dark"
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                default_theme = config_data.get("default_theme", "dark")
+        except Exception:
+            pass
+
+    # ── Build head script that forces theme before Gradio renders ──
+    if default_theme == "dark":
+        head_script = """<script>
+(function(){
+    document.documentElement.classList.add('dark');
+    var _mo = new MutationObserver(function(m, obs){
+        if(document.body){
+            document.body.classList.add('dark');
+            obs.disconnect();
+        }
+    });
+    _mo.observe(document.documentElement, {childList:true, subtree:true});
+    window.addEventListener('DOMContentLoaded', function(){
+        document.body.classList.add('dark');
+    });
+})();
+</script>"""
+    else:
+        head_script = """<script>
+(function(){
+    document.documentElement.classList.remove('dark');
+    var _mo = new MutationObserver(function(m, obs){
+        if(document.body){
+            document.body.classList.remove('dark');
+            obs.disconnect();
+        }
+    });
+    _mo.observe(document.documentElement, {childList:true, subtree:true});
+    window.addEventListener('DOMContentLoaded', function(){
+        document.body.classList.remove('dark');
+    });
+})();
+</script>"""
+
     app = create_ui()
 
     app.launch(
-
         server_name="127.0.0.1",
-
         server_port=7862,
-
         share=False,
-
         inbrowser=True,
-
         css=CUSTOM_CSS,
-
         theme=gr.themes.Base(
-
             primary_hue="slate",
-
             secondary_hue="gray",
-
             neutral_hue="slate",
-
             font=gr.themes.GoogleFont("Inter"),
-
         ),
-
+        head=head_script,
     )
